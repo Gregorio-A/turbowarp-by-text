@@ -12,6 +12,9 @@ class TextWarpDebugController {
         this.pauseAllRequested = false;
         this.breakpoints = new Map();
         this.paused = new Map();
+        this.compiledPaused = new Map();
+        this.compiledStepOnce = new Set();
+        this.pauseAllExempt = new Set();
         this.stepAfterBlock = new Map();
         this.activeByThread = new Map();
         this.runtimeErrors = [];
@@ -26,7 +29,89 @@ class TextWarpDebugController {
             this.runtime.on('BLOCKSINFO_UPDATE', this.extensionListener);
             this.runtime.on('PROJECT_STOP_ALL', () => this.clearPaused(false));
         }
+        this.instrumentThreadCreation();
+        this.instrumentThreadStepping();
         this.instrumentPrimitives();
+    }
+
+    instrumentThreadCreation () {
+        if (!this.runtime || typeof this.runtime._pushThread !== 'function') return;
+        const current = this.runtime._pushThread;
+        if (current.__textwarpController === this) return;
+        const original = current.__textwarpOriginal || current;
+        const controller = this;
+        const wrapped = function (id, target, options) {
+            const targetBreakpoints = target && controller.breakpoints.get(target.id);
+            const useInterpreter = Boolean(controller.enabled && targetBreakpoints && targetBreakpoints.size);
+            if (!useInterpreter || !this.compilerOptions || !this.compilerOptions.enabled) {
+                return original.call(this, id, target, options);
+            }
+            // _pushThread checks this flag synchronously. Temporarily disabling it
+            // keeps only this target's new thread out of the compiler; other
+            // actors and the global compiler setting remain untouched.
+            this.compilerOptions.enabled = false;
+            try {
+                return original.call(this, id, target, options);
+            } finally {
+                this.compilerOptions.enabled = true;
+            }
+        };
+        wrapped.__textwarpOriginal = original;
+        wrapped.__textwarpController = this;
+        this.runtime._pushThread = wrapped;
+    }
+
+    instrumentThreadStepping () {
+        const sequencer = this.runtime && this.runtime.sequencer;
+        if (!sequencer || typeof sequencer.stepThread !== 'function') return;
+        const current = sequencer.stepThread;
+        if (current.__textwarpController === this) return;
+        const original = current.__textwarpOriginal || current;
+        const controller = this;
+        const wrapped = function (thread) {
+            if (!controller.enabled || !thread || !thread.isCompiled) return original.call(this, thread);
+            if (controller.compiledStepOnce.has(thread)) {
+                controller.compiledStepOnce.delete(thread);
+                return original.call(this, thread);
+            }
+            if (controller.pauseAllRequested && !controller.pauseAllExempt.has(thread)) {
+                controller.pauseCompiledThread(thread);
+                return;
+            }
+            return original.call(this, thread);
+        };
+        wrapped.__textwarpOriginal = original;
+        wrapped.__textwarpController = this;
+        sequencer.stepThread = wrapped;
+    }
+
+    pauseCompiledThread (thread) {
+        if (this.compiledPaused.has(thread)) return;
+        const blockId = thread.blockGlowInFrame || (thread.peekStack && thread.peekStack());
+        const active = this.activeByThread.get(thread) || {};
+        const location = this.sourceLocation(thread, blockId) || active.location;
+        const threadId = thread.getId ? thread.getId() : active.threadId || String(this.compiledPaused.size + 1);
+        this.activeByThread.set(thread, {threadId, blockId, location, target: thread.target});
+        this.compiledPaused.set(thread, {
+            threadId,
+            blockId,
+            location,
+            target: thread.target,
+            status: thread.status
+        });
+        // scratch-vm reserves status 1 for a suspended thread. Unlike restarting
+        // the script in the interpreter, this preserves the compiled generator
+        // and all of its local execution state until it is resumed.
+        thread.status = 1;
+        this.notify();
+    }
+
+    restoreCompiledThread (thread) {
+        const state = this.compiledPaused.get(thread);
+        if (!state) return false;
+        this.compiledPaused.delete(thread);
+        if (thread.status === 1) thread.status = state.status === 1 ? 0 : state.status;
+        return true;
     }
 
     instrumentPrimitives () {
@@ -51,6 +136,8 @@ class TextWarpDebugController {
         if (enabled === this.enabled) return;
         this.enabled = enabled;
         if (enabled) {
+            this.instrumentThreadCreation();
+            this.instrumentThreadStepping();
             this.instrumentPrimitives();
             this.pollTimer = setInterval(() => this.notify(), 80);
             this.updateExecutionMode();
@@ -71,27 +158,28 @@ class TextWarpDebugController {
     }
 
     updateExecutionMode () {
-        const requiresInterpreter = Boolean(
-            this.enabled && (this.hasBreakpoints() || this.pauseAllRequested || this.paused.size || this.stepAfterBlock.size)
-        );
-        if (requiresInterpreter === this.interpreterRequired) return;
-        this.interpreterRequired = requiresInterpreter;
-        if (requiresInterpreter) {
+        const selectiveInterpreter = Boolean(this.enabled && this.hasBreakpoints());
+        const requiresGlobalInterpreter = Boolean(this.enabled && this.pauseAllRequested);
+        this.interpreterRequired = selectiveInterpreter || requiresGlobalInterpreter;
+        if (requiresGlobalInterpreter) {
             if (this.originalCompilerEnabled === null) {
                 this.originalCompilerEnabled = Boolean(this.runtime.compilerOptions && this.runtime.compilerOptions.enabled);
+                if (typeof this.runtime.setCompilerOptions === 'function') this.runtime.setCompilerOptions({enabled: false});
             }
-            if (typeof this.runtime.setCompilerOptions === 'function') this.runtime.setCompilerOptions({enabled: false});
         } else {
             this.restoreCompilerMode();
         }
     }
 
     restoreCompilerMode () {
-        if (this.originalCompilerEnabled !== null && typeof this.runtime.setCompilerOptions === 'function') {
+        if (
+            this.originalCompilerEnabled !== null &&
+            Boolean(this.runtime.compilerOptions && this.runtime.compilerOptions.enabled) !== this.originalCompilerEnabled &&
+            typeof this.runtime.setCompilerOptions === 'function'
+        ) {
             this.runtime.setCompilerOptions({enabled: this.originalCompilerEnabled});
         }
         this.originalCompilerEnabled = null;
-        this.interpreterRequired = false;
     }
 
     setBreakpoints (target, lines) {
@@ -117,7 +205,7 @@ class TextWarpDebugController {
             this.stepAfterBlock.delete(thread);
             return true;
         }
-        if (this.pauseAllRequested) return true;
+        if (this.pauseAllRequested && !this.pauseAllExempt.has(thread)) return true;
         const lines = this.breakpoints.get(thread.target.id);
         return Boolean(lines && lines.has(location.startLine));
     }
@@ -181,6 +269,7 @@ class TextWarpDebugController {
     }
 
     pauseAll () {
+        this.pauseAllExempt.clear();
         this.pauseAllRequested = true;
         this.setEnabled(true);
         this.updateExecutionMode();
@@ -189,28 +278,56 @@ class TextWarpDebugController {
 
     resumeAll () {
         this.pauseAllRequested = false;
+        this.pauseAllExempt.clear();
         Array.from(this.paused.values()).forEach(state => state.continue());
+        Array.from(this.compiledPaused.keys()).forEach(thread => this.restoreCompiledThread(thread));
+        this.compiledStepOnce.clear();
         this.updateExecutionMode();
         this.notify();
     }
 
     resumeThread (threadId) {
         const entry = Array.from(this.paused.entries()).find(([, state]) => state.threadId === threadId);
-        if (entry) entry[1].continue();
+        if (entry) {
+            this.pauseAllExempt.add(entry[0]);
+            entry[1].continue();
+            return;
+        }
+        const compiled = Array.from(this.compiledPaused.entries()).find(([, state]) => state.threadId === threadId);
+        if (compiled) {
+            this.pauseAllExempt.add(compiled[0]);
+            this.restoreCompiledThread(compiled[0]);
+            this.notify();
+        }
     }
 
     stepThread (threadId) {
         const entry = Array.from(this.paused.entries()).find(([, state]) => state.threadId === threadId);
-        if (!entry) return;
-        this.stepAfterBlock.set(entry[0], entry[1].blockId);
-        this.updateExecutionMode();
-        entry[1].continue();
+        if (entry) {
+            this.pauseAllExempt.delete(entry[0]);
+            this.stepAfterBlock.set(entry[0], entry[1].blockId);
+            this.updateExecutionMode();
+            entry[1].continue();
+            return;
+        }
+        const compiled = Array.from(this.compiledPaused.entries()).find(([, state]) => state.threadId === threadId);
+        if (compiled) {
+            this.pauseAllExempt.delete(compiled[0]);
+            this.compiledStepOnce.add(compiled[0]);
+            this.restoreCompiledThread(compiled[0]);
+            this.notify();
+        }
     }
 
     clearPaused (resume) {
         const states = Array.from(this.paused.values());
+        const compiledThreads = Array.from(this.compiledPaused.keys());
         this.paused.clear();
         if (resume) states.forEach(state => state.continue());
+        if (resume) compiledThreads.forEach(thread => this.restoreCompiledThread(thread));
+        else this.compiledPaused.clear();
+        this.compiledStepOnce.clear();
+        this.pauseAllExempt.clear();
         if (this.enabled) this.updateExecutionMode();
         this.notify();
     }
@@ -218,12 +335,19 @@ class TextWarpDebugController {
     snapshot () {
         const runtimeThreads = new Set(this.runtime && this.runtime.threads || []);
         Array.from(this.activeByThread.keys()).forEach(thread => {
-            if (!runtimeThreads.has(thread) && !this.paused.has(thread)) this.activeByThread.delete(thread);
+            if (!runtimeThreads.has(thread) && !this.paused.has(thread) && !this.compiledPaused.has(thread)) {
+                this.activeByThread.delete(thread);
+            }
         });
-        const allThreads = new Set([...runtimeThreads, ...this.paused.keys()]);
+        Array.from(this.compiledPaused.keys()).forEach(thread => {
+            if (!runtimeThreads.has(thread)) this.compiledPaused.delete(thread);
+        });
+        const allThreads = new Set([...runtimeThreads, ...this.paused.keys(), ...this.compiledPaused.keys()]);
         const threads = Array.from(allThreads).map(thread => {
             const active = this.activeByThread.get(thread) || {};
-            const paused = this.paused.get(thread);
+            const interpretedPause = this.paused.get(thread);
+            const compiledPause = this.compiledPaused.get(thread);
+            const paused = interpretedPause || compiledPause;
             const blockId = paused ? paused.blockId : (thread.peekStack && thread.peekStack()) || active.blockId;
             const location = paused ? paused.location : this.sourceLocation(thread, blockId) || active.location;
             return {
@@ -233,6 +357,8 @@ class TextWarpDebugController {
                 blockId,
                 line: location ? location.startLine : null,
                 paused: Boolean(paused),
+                executionMode: thread.isCompiled ? 'jit' : 'interpreter',
+                stepGranularity: compiledPause ? 'frame' : 'block',
                 status: Boolean(paused) ? 'paused' : 'running'
             };
         });
@@ -245,6 +371,7 @@ class TextWarpDebugController {
         return {
             enabled: this.enabled,
             interpreterRequired: this.interpreterRequired,
+            selectiveInterpreter: Boolean(this.enabled && this.hasBreakpoints() && !this.pauseAllRequested),
             jitEnabled: Boolean(this.runtime && this.runtime.compilerOptions && this.runtime.compilerOptions.enabled),
             pauseAllRequested: this.pauseAllRequested,
             threads,

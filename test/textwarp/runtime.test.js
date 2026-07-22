@@ -122,3 +122,43 @@ on green_flag:
     assert.equal(Object.values(target.variables).find(variable => variable.name === 'score').value, 3);
     debuggerController.setEnabled(false);
 });
+
+test('global pause freezes an existing JIT thread and steps one compiled frame', async () => {
+    const {vm, target, stage} = await setup();
+    const source = `actor Player
+on green_flag:
+    forever:
+        change_x(1)`;
+    const compilation = compileText(source, options(target, stage));
+    assert.equal(compilation.success, true, JSON.stringify(compilation.diagnostics));
+    applyCompilation(vm, target, compilation);
+    vm.runtime.setCompilerOptions({enabled: true});
+    vm.greenFlag();
+    const thread = vm.runtime.threads.find(item => item.target === target);
+    assert.ok(thread);
+    assert.equal(thread.isCompiled, true);
+    vm.runtime._step();
+
+    const debuggerController = new TextWarpDebugController(vm);
+    debuggerController.pauseAll();
+    const beforePause = target.x;
+    vm.runtime._step();
+    assert.equal(target.x, beforePause);
+    const paused = debuggerController.snapshot().threads.find(item => item.id === thread.getId());
+    assert.equal(paused.paused, true);
+    assert.equal(paused.executionMode, 'jit');
+    assert.equal(paused.stepGranularity, 'frame');
+
+    debuggerController.stepThread(thread.getId());
+    vm.runtime._step();
+    assert.ok(target.x > beforePause);
+    const afterStep = target.x;
+    vm.runtime._step();
+    assert.equal(target.x, afterStep);
+
+    debuggerController.resumeAll();
+    vm.runtime._step();
+    assert.ok(target.x > afterStep);
+    debuggerController.setEnabled(false);
+    vm.stopAll();
+});

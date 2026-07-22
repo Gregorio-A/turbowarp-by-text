@@ -155,9 +155,47 @@ const targetForModule = (vm, module, usedTargets) => {
     return targets.find(target => (target.getName ? target.getName() : target.sprite && target.sprite.name) === module.name) || targets[0];
 };
 
+const restoreExtensionDependencies = async (vm, extensions) => {
+    const manager = vm && vm.extensionManager;
+    if (!manager) {
+        if ((extensions || []).length) throw new Error('A VM não possui um gerenciador de extensões.');
+        return {loaded: [], alreadyLoaded: []};
+    }
+    const loaded = [];
+    const alreadyLoaded = [];
+    for (const dependency of extensions || []) {
+        if (!dependency || typeof dependency.id !== 'string' || !dependency.id) continue;
+        if (manager.isExtensionLoaded(dependency.id)) {
+            alreadyLoaded.push(dependency.id);
+            continue;
+        }
+        const locator = dependency.url || (manager.isBuiltinExtension(dependency.id) ? dependency.id : null);
+        if (!locator) {
+            throw new Error(`A extensão "${dependency.id}" é necessária, mas extensions/lock.json não contém sua URL.`);
+        }
+        const securityManager = vm.securityManager || manager.securityManager;
+        if (
+            dependency.url && securityManager &&
+            typeof securityManager.canLoadExtensionFromProject === 'function' &&
+            !await securityManager.canLoadExtensionFromProject(dependency.url)
+        ) {
+            throw new Error(`Permissão negada para carregar a extensão "${dependency.id}".`);
+        }
+        await manager.loadExtensionURL(locator);
+        if (!manager.isExtensionLoaded(dependency.id)) {
+            throw new Error(`A dependência ${locator} não registrou a extensão esperada "${dependency.id}".`);
+        }
+        loaded.push(dependency.id);
+    }
+    return {loaded, alreadyLoaded};
+};
+
 const importTextwarpProject = async (vm, data) => {
     if (!vm || typeof vm.loadProject !== 'function') throw new Error('A VM não pode abrir projetos.');
     const unpacked = await unpackTextwarp(data);
+    // Restore the explicit lock before deserializing the SB3. This also lets old
+    // packages open when project.json lost its custom extensionURLs metadata.
+    const extensionRestore = await restoreExtensionDependencies(vm, unpacked.extensions);
     await vm.loadProject(unpacked.projectData);
     const stageModule = unpacked.modules.find(module => module.isStage);
     const stageId = stageModule ? stageModule.moduleId : vm.runtime.getTargetForStage().id;
@@ -204,7 +242,7 @@ const importTextwarpProject = async (vm, data) => {
     });
     if (typeof vm.emitTargetsUpdate === 'function') vm.emitTargetsUpdate();
     if (typeof vm.emitWorkspaceUpdate === 'function') vm.emitWorkspaceUpdate();
-    return Object.assign({}, unpacked, {diagnostics});
+    return Object.assign({}, unpacked, {diagnostics, extensionRestore});
 };
 
 module.exports = {
@@ -213,5 +251,6 @@ module.exports = {
     exportTextwarpProject,
     importTextwarpProject,
     packTextwarp,
+    restoreExtensionDependencies,
     unpackTextwarp
 };

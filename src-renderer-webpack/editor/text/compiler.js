@@ -7,6 +7,7 @@ const {
     operatorRegistry
 } = require('./block-registry');
 const {parseText} = require('./parser');
+const {encodeParameterId, encodeProcedureTypes} = require('./procedure-metadata');
 
 const semanticDiagnostic = (message, location, code, severity = 'error') => ({
     message,
@@ -60,6 +61,7 @@ const analyzeAndBuildIR = (ast, options = {}) => {
     const targetId = options.targetId || targetName;
     const stageId = options.stageId || (isStage ? targetId : 'stage');
     const extensionCatalog = options.extensionCatalog || {};
+    const availableOpcodes = options.availableOpcodes ? new Set(options.availableOpcodes) : null;
     const externalVariables = Array.isArray(options.variables) ? options.variables : [];
     const externalBroadcasts = Array.isArray(options.broadcasts) ? options.broadcasts : [];
     const declarations = [];
@@ -167,8 +169,17 @@ const analyzeAndBuildIR = (ast, options = {}) => {
         if (duplicateParameter) diagnostics.push(semanticDiagnostic(
             `O parâmetro "${duplicateParameter}" está duplicado.`, node.location, 'duplicate-parameter'
         ));
+        if (node.returnType) diagnostics.push(semanticDiagnostic(
+            `O procedimento "${node.name}" retorna um valor e usa procedures_return, disponível no TurboWarp mas não no Scratch oficial.`,
+            node.location,
+            'turbowarp-only-return-procedure',
+            'warning'
+        ));
         const parameters = node.parameters.map(parameter => ({
-            id: stableId(targetId, `procedure:${node.name}/parameter:${parameter.name}`),
+            id: encodeParameterId(
+                stableId(targetId, `procedure:${node.name}/parameter:${parameter.name}`),
+                parameter.valueType || 'any'
+            ),
             name: parameter.name,
             valueType: parameter.valueType || 'any'
         }));
@@ -261,6 +272,12 @@ const analyzeAndBuildIR = (ast, options = {}) => {
         try {
             const payload = JSON.parse(call.arguments[0].value);
             if (!payload || typeof payload.opcode !== 'string' || !payload.opcode) throw new Error('opcode ausente');
+            if (availableOpcodes && !availableOpcodes.has(payload.opcode)) diagnostics.push(semanticDiagnostic(
+                `A primitiva "${payload.opcode}" de raw.${kind} não está carregada; o bloco será preservado, mas não executará até que sua extensão seja autorizada e carregada.`,
+                location,
+                'raw-primitive-unavailable',
+                'warning'
+            ));
             return payload;
         } catch (error) {
             diagnostics.push(semanticDiagnostic(
@@ -833,7 +850,7 @@ const generateGraph = ir => {
             warp: String(Boolean(procedure.warp))
         };
         if (includeReturn && procedure.returnType) mutation.return = procedure.returnType === 'boolean' ? '2' : '1';
-        return mutation;
+        return encodeProcedureTypes(mutation, procedure, includeReturn);
     };
 
     const applyProcedureArguments = (block, procedure, argumentValues, path, location) => {
@@ -1111,7 +1128,7 @@ const generateGraph = ir => {
         addBlock(definition, procedure.location);
         const prototype = makeBlock(prototypeId, 'procedures_prototype', definitionId);
         prototype.shadow = true;
-        prototype.mutation = {
+        prototype.mutation = encodeProcedureTypes({
             tagName: 'mutation',
             children: [],
             proccode: procedure.proccode,
@@ -1119,7 +1136,7 @@ const generateGraph = ir => {
             argumentnames: JSON.stringify(procedure.parameters.map(item => item.name)),
             argumentdefaults: JSON.stringify(procedure.parameters.map(item => item.valueType === 'boolean' ? false : '')),
             warp: String(Boolean(procedure.warp))
-        };
+        }, procedure);
         addBlock(prototype, procedure.location);
         definition.inputs.custom_block = {name: 'custom_block', block: prototypeId, shadow: prototypeId};
         procedure.parameters.forEach(parameter => {

@@ -7,6 +7,7 @@ const JSZip = require('@turbowarp/jszip');
 const {
     FORMAT_NAME,
     packTextwarp,
+    restoreExtensionDependencies,
     unpackTextwarp
 } = require('../../src-renderer-webpack/editor/text/textwarp-package');
 
@@ -47,4 +48,68 @@ test('rejects ZIP files that are not TextWarp projects', async () => {
     zip.file('readme.txt', 'not a project');
     const data = await zip.generateAsync({type: 'uint8array'});
     await assert.rejects(() => unpackTextwarp(data), /manifest\.json/);
+});
+
+test('restores locked extension dependencies before a project is compiled', async () => {
+    const loaded = new Set(['pen']);
+    const requested = [];
+    const manager = {
+        isExtensionLoaded: id => loaded.has(id),
+        isBuiltinExtension: id => id === 'music',
+        async loadExtensionURL (locator) {
+            requested.push(locator);
+            loaded.add(locator === 'music' ? 'music' : 'physics');
+        }
+    };
+    const permissions = [];
+    const vm = {
+        extensionManager: manager,
+        securityManager: {
+            async canLoadExtensionFromProject (url) {
+                permissions.push(url);
+                return true;
+            }
+        }
+    };
+    const restored = await restoreExtensionDependencies(vm, [
+        {id: 'pen', url: null},
+        {id: 'music', url: null},
+        {id: 'physics', url: 'https://example.com/physics.js'}
+    ]);
+    assert.deepEqual(restored.alreadyLoaded, ['pen']);
+    assert.deepEqual(restored.loaded, ['music', 'physics']);
+    assert.deepEqual(requested, ['music', 'https://example.com/physics.js']);
+    assert.deepEqual(permissions, ['https://example.com/physics.js']);
+});
+
+test('rejects a missing locked URL instead of silently keeping raw blocks inert', async () => {
+    const vm = {
+        extensionManager: {
+            isExtensionLoaded: () => false,
+            isBuiltinExtension: () => false
+        }
+    };
+    await assert.rejects(
+        () => restoreExtensionDependencies(vm, [{id: 'physics', url: null}]),
+        /não contém sua URL/
+    );
+});
+
+test('rejects a locked extension when project loading permission is denied', async () => {
+    let loaded = false;
+    const vm = {
+        extensionManager: {
+            isExtensionLoaded: () => false,
+            isBuiltinExtension: () => false,
+            async loadExtensionURL () { loaded = true; }
+        },
+        securityManager: {
+            async canLoadExtensionFromProject () { return false; }
+        }
+    };
+    await assert.rejects(
+        () => restoreExtensionDependencies(vm, [{id: 'physics', url: 'https://example.com/physics.js'}]),
+        /Permissão negada/
+    );
+    assert.equal(loaded, false);
 });

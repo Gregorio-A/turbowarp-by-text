@@ -8,7 +8,7 @@ const {compileText} = require('../../src-renderer-webpack/editor/text/compiler')
 const {TextWarpDebugController} = require('../../src-renderer-webpack/editor/text/debug-controller');
 const {decompileTarget} = require('../../src-renderer-webpack/editor/text/decompiler');
 const {buildExtensionCatalog, buildExtensionInventory} = require('../../src-renderer-webpack/editor/text/extension-catalog');
-const {applyCompilation} = require('../../src-renderer-webpack/editor/text/vm-adapter');
+const {applyCompilation, SOURCE_MARKER} = require('../../src-renderer-webpack/editor/text/vm-adapter');
 
 const actorOptions = {
     targetId: 'sprite-v03',
@@ -44,11 +44,18 @@ procedure positive(value: number, enabled: boolean) -> boolean:
     if enabled:
         return value > 0
     return false
+procedure echo(label: string, data: any) -> string:
+    return label
 on green_flag:
     if positive(twice(3), true):
-        result = twice(7)`;
+        result = twice(7)
+        say(echo("ok", result))`;
     const result = compileText(source, actorOptions);
     assert.equal(result.success, true, JSON.stringify(result.diagnostics));
+    assert.equal(
+        result.diagnostics.filter(item => item.code === 'turbowarp-only-return-procedure').length,
+        3
+    );
 
     const procedures = Object.fromEntries(result.ir.procedures.map(procedure => [procedure.name, procedure]));
     assert.equal(procedures.twice.proccode, 'twice %s');
@@ -56,9 +63,11 @@ on green_flag:
     assert.equal(procedures.twice.warp, true);
     assert.equal(procedures.positive.proccode, 'positive %s %b');
     assert.equal(procedures.positive.returnType, 'boolean');
+    assert.equal(procedures.echo.proccode, 'echo %s %s');
+    assert.equal(procedures.echo.returnType, 'string');
 
     const blocks = Object.values(result.graph.blocks);
-    assert.equal(blocks.filter(block => block.opcode === 'procedures_return').length, 3);
+    assert.equal(blocks.filter(block => block.opcode === 'procedures_return').length, 4);
     assert.ok(blocks.some(block => block.opcode === 'argument_reporter_boolean'));
     assert.ok(blocks.some(block => block.opcode === 'procedures_call' && block.mutation.return === '1'));
     assert.ok(blocks.some(block => block.opcode === 'procedures_call' && block.mutation.return === '2'));
@@ -66,6 +75,24 @@ on green_flag:
         block.opcode === 'procedures_prototype' && block.mutation.proccode === 'twice %s'
     );
     assert.equal(twicePrototype.mutation.warp, 'true');
+    assert.equal(twicePrototype.mutation.textwarp_argument_types, '["number"]');
+    assert.equal(twicePrototype.mutation.textwarp_return_type, 'number');
+    const target = {
+        id: actorOptions.targetId,
+        isStage: false,
+        variables: {},
+        getName: () => 'Player',
+        blocks: {_blocks: result.graph.blocks, getBlock: id => result.graph.blocks[id]}
+    };
+    const decompiled = decompileTarget(target);
+    assert.match(decompiled.source, /procedure twice\(value: number\) -> number warp:/);
+    assert.match(decompiled.source, /procedure positive\(value: number, enabled: boolean\) -> boolean:/);
+    assert.match(decompiled.source, /procedure echo\(label: string, data\) -> string:/);
+    blocks.filter(block => block.opcode === 'procedures_prototype').forEach(prototype => {
+        delete prototype.mutation.textwarp_argument_types;
+    });
+    const withoutCustomArgumentAttribute = decompileTarget(target);
+    assert.match(withoutCustomArgumentAttribute.source, /procedure echo\(label: string, data\) -> string:/);
 });
 
 test('executes reporter procedures in scratch-vm', async () => {
@@ -95,6 +122,37 @@ on green_flag:
     vm.greenFlag();
     for (let index = 0; index < 30; index++) vm.runtime._step();
     assert.equal(Object.values(target.variables).find(variable => variable.name === 'result').value, 14);
+});
+
+test('recovers exact parameter and return types from an SB3 without embedded TextWarp source', async () => {
+    const vm = new VM();
+    await vm.loadProject(emptyProject());
+    const target = vm.runtime.targets.find(item => !item.isStage);
+    const stage = vm.runtime.getTargetForStage();
+    const source = `actor Player
+procedure convert(amount: number, label: string, extra: any, enabled: boolean) -> string:
+    return label
+on green_flag:
+    say(convert(1, "ok", 0, true))`;
+    applyCompilation(vm, target, compileText(source, {
+        targetId: target.id,
+        stageId: stage.id,
+        targetName: target.getName(),
+        isStage: false
+    }));
+    Object.keys(target.comments).forEach(id => {
+        if (target.comments[id].text.startsWith(SOURCE_MARKER)) delete target.comments[id];
+    });
+
+    const saved = await vm.saveProjectSb3('arraybuffer');
+    const restoredVm = new VM();
+    await restoredVm.loadProject(saved);
+    const restoredTarget = restoredVm.runtime.targets.find(item => !item.isStage);
+    const decompiled = decompileTarget(restoredTarget);
+    assert.match(
+        decompiled.source,
+        /procedure convert\(amount: number, label: string, extra, enabled: boolean\) -> string:/
+    );
 });
 
 test('compiles and decompiles extension conditionals with multiple branches', () => {
@@ -180,8 +238,12 @@ test('round-trips unknown historical and third-party opcodes through raw text', 
     assert.equal(decompiled.success, true);
     assert.match(decompiled.source, /on raw\.hat\(/);
     assert.match(decompiled.source, /raw\.command\(/);
-    const recompiled = compileText(decompiled.source, actorOptions);
+    const recompiled = compileText(decompiled.source, Object.assign({}, actorOptions, {availableOpcodes: []}));
     assert.equal(recompiled.success, true, JSON.stringify(recompiled.diagnostics));
+    assert.equal(
+        recompiled.diagnostics.filter(item => item.code === 'raw-primitive-unavailable').length,
+        2
+    );
     assert.deepEqual(
         new Set(Object.values(recompiled.graph.blocks).map(block => block.opcode)),
         new Set(['legacy_when_magic', 'vendor_do_thing', 'vendor_value'])
@@ -265,6 +327,9 @@ test('keeps JIT enabled for observation and switches to interpreter only for pau
         _primitives: {},
         threads: [],
         compilerOptions: {enabled: true},
+        _pushThread (id, target) {
+            return {id, target, compiled: this.compilerOptions.enabled};
+        },
         on (name, listener) { listeners[name] = listener; },
         setCompilerOptions (options) { Object.assign(this.compilerOptions, options); }
     };
@@ -274,9 +339,80 @@ test('keeps JIT enabled for observation and switches to interpreter only for pau
     assert.equal(runtime.compilerOptions.enabled, true);
     assert.equal(controller.snapshot().interpreterRequired, false);
     controller.setBreakpoints(target, [4]);
-    assert.equal(runtime.compilerOptions.enabled, false);
+    assert.equal(runtime.compilerOptions.enabled, true);
     assert.equal(controller.snapshot().interpreterRequired, true);
+    assert.equal(controller.snapshot().selectiveInterpreter, true);
+    assert.equal(runtime._pushThread('hat', target).compiled, false);
+    assert.equal(runtime._pushThread('hat', {id: 'other'}).compiled, true);
+    controller.pauseAll();
+    assert.equal(runtime.compilerOptions.enabled, false);
+    assert.equal(controller.snapshot().selectiveInterpreter, false);
+    controller.resumeAll();
+    assert.equal(runtime.compilerOptions.enabled, true);
     controller.setBreakpoints(target, []);
+    assert.equal(runtime.compilerOptions.enabled, true);
+    controller.setEnabled(false);
+});
+
+test('pauses an already compiled thread without losing its generator state', () => {
+    const listeners = {};
+    let executedFrames = 0;
+    const target = {
+        id: 'compiled-sprite',
+        getName: () => 'Compiled sprite',
+        blocks: {getBlock: () => null}
+    };
+    const thread = {
+        isCompiled: true,
+        status: 0,
+        target,
+        getId: () => 'compiled-thread',
+        peekStack: () => 'compiled-hat'
+    };
+    const runtime = {
+        _primitives: {},
+        threads: [thread],
+        compilerOptions: {enabled: true},
+        sequencer: {
+            stepThread (activeThread) {
+                assert.equal(activeThread, thread);
+                executedFrames++;
+            }
+        },
+        on (name, listener) { listeners[name] = listener; },
+        setCompilerOptions (options) { Object.assign(this.compilerOptions, options); }
+    };
+    const controller = new TextWarpDebugController({runtime});
+    controller.setEnabled(true);
+    runtime.sequencer.stepThread(thread);
+    assert.equal(executedFrames, 1);
+
+    controller.pauseAll();
+    runtime.sequencer.stepThread(thread);
+    assert.equal(executedFrames, 1);
+    assert.equal(thread.status, 1);
+    let snapshot = controller.snapshot();
+    assert.equal(snapshot.threads[0].paused, true);
+    assert.equal(snapshot.threads[0].executionMode, 'jit');
+    assert.equal(snapshot.threads[0].stepGranularity, 'frame');
+
+    controller.stepThread('compiled-thread');
+    assert.equal(thread.status, 0);
+    runtime.sequencer.stepThread(thread);
+    assert.equal(executedFrames, 2);
+    runtime.sequencer.stepThread(thread);
+    assert.equal(executedFrames, 2);
+    assert.equal(thread.status, 1);
+
+    controller.resumeThread('compiled-thread');
+    runtime.sequencer.stepThread(thread);
+    assert.equal(executedFrames, 3);
+    assert.equal(thread.status, 0);
+    controller.pauseAll();
+    runtime.sequencer.stepThread(thread);
+    assert.equal(thread.status, 1);
+    controller.resumeAll();
+    assert.equal(thread.status, 0);
     assert.equal(runtime.compilerOptions.enabled, true);
     controller.setEnabled(false);
 });

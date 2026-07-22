@@ -12,6 +12,7 @@ import {getDebugController} from './debug-controller';
 import {decompileTarget} from './decompiler';
 import {buildExtensionInventory, summarizeExtensionCatalog} from './extension-catalog';
 import MonacoEditor from './monaco-editor.jsx';
+import {mergeVisualSource} from './source-merge';
 import {exportTextwarpProject, importTextwarpProject} from './textwarp-package';
 import {
     clearTextwarpHandle,
@@ -130,6 +131,7 @@ class TextEditor extends React.Component {
         this.handlePackageFile = this.handlePackageFile.bind(this);
         this.handleToggleBreakpoint = this.handleToggleBreakpoint.bind(this);
         this.handleExtensionsChanged = this.handleExtensionsChanged.bind(this);
+        this.handleInsertExtensionXml = this.handleInsertExtensionXml.bind(this);
         this.handleProjectChanged = this.handleProjectChanged.bind(this);
         this.handleKeyDown = this.handleKeyDown.bind(this);
     }
@@ -220,7 +222,8 @@ class TextEditor extends React.Component {
                 name: variable.name,
                 generated: generatedStageVariables.has(variable.id)
             })),
-            extensionCatalog: this.extensionCatalog
+            extensionCatalog: this.extensionCatalog,
+            availableOpcodes: Object.keys(this.props.vm.runtime._primitives || {})
         };
     }
 
@@ -241,6 +244,29 @@ class TextEditor extends React.Component {
         this.setState({diagnostics: compilation.diagnostics});
     }
 
+    handleInsertExtensionXml (entry) {
+        try {
+            const ScratchBlocks = typeof window !== 'undefined' && (window.ScratchBlocks || window.Blockly);
+            const workspace = ScratchBlocks && typeof ScratchBlocks.getMainWorkspace === 'function' &&
+                ScratchBlocks.getMainWorkspace();
+            if (!workspace || !ScratchBlocks.Xml || typeof ScratchBlocks.Xml.domToWorkspace !== 'function') {
+                throw new Error('Abra a visualização Blocos ou Dividido antes de inserir XML.');
+            }
+            const xml = /^\s*<xml\b/i.test(entry.xml) ? entry.xml :
+                `<xml xmlns="http://www.w3.org/1999/xhtml">${entry.xml}</xml>`;
+            const dom = ScratchBlocks.Xml.textToDom(xml);
+            const inserted = ScratchBlocks.Xml.domToWorkspace(dom, workspace) || [];
+            this.setState({
+                viewMode: 'split',
+                extensionsOpen: false,
+                status: `${Array.isArray(inserted) ? inserted.length : 1} bloco(s) inserido(s) pela paleta da extensão.`,
+                statusKind: 'success'
+            });
+        } catch (error) {
+            this.setState({status: error.message, statusKind: 'error'});
+        }
+    }
+
     handleProjectChanged () {
         if (Date.now() < this.suppressBlockSyncUntil) return;
         clearTimeout(this.blockSyncTimer);
@@ -250,12 +276,32 @@ class TextEditor extends React.Component {
             const fingerprint = blockFingerprint(target);
             if (fingerprint === this.lastBlockFingerprint) return;
             const result = decompileTarget(target, {extensionCatalog: this.extensionCatalog});
+            const compileOptions = this.getCompileOptions(target);
+            const visualCompilation = compileText(result.source, compileOptions);
+            result.canonicalSource = result.source;
+            result.visualCompilation = visualCompilation;
             const hasPendingText = this.state.source !== this.lastAppliedSource || countErrors(this.state.diagnostics) > 0;
-            if (hasPendingText && result.source !== this.state.source) {
+            const baseCompilation = this.lastAppliedSource ? compileText(this.lastAppliedSource, compileOptions) : null;
+            const textCompilation = compileText(this.state.source, compileOptions);
+            const merged = baseCompilation && visualCompilation.success ? mergeVisualSource({
+                baseSource: this.lastAppliedSource,
+                textSource: this.state.source,
+                visualSource: result.canonicalSource,
+                baseCompilation,
+                textCompilation,
+                visualCompilation
+            }) : null;
+            if (merged && merged.source !== null) {
+                result.source = merged.source;
+                result.semanticMerge = merged;
+            }
+            if (hasPendingText && (!merged || merged.conflicts.length > 0)) {
                 this.lastBlockFingerprint = fingerprint;
                 this.setState({
                     visualConflict: result,
-                    status: 'Texto e blocos foram alterados ao mesmo tempo. Escolha qual versão manter.',
+                    status: merged && merged.conflicts.length ?
+                        `Conflito semântico em ${merged.conflicts.length} unidade(s). Escolha qual versão manter.` :
+                        'Texto inválido e blocos foram alterados ao mesmo tempo. Escolha qual versão manter.',
                     statusKind: 'working'
                 });
                 return;
@@ -268,16 +314,30 @@ class TextEditor extends React.Component {
         const target = this.getTarget();
         if (!target || !result) return;
         clearTimeout(this.compileTimer);
-        const compilation = compileText(result.source, this.getCompileOptions(target));
+        const compileOptions = this.getCompileOptions(target);
+        const canonicalSource = result.canonicalSource || result.source;
+        const visualCompilation = result.visualCompilation || compileText(canonicalSource, compileOptions);
+        const compilation = compileText(result.source, compileOptions);
+        if (!visualCompilation.success || !compilation.success) {
+            this.setState({
+                diagnostics: compilation.diagnostics,
+                status: 'A sincronização produziu uma fonte inválida; nenhuma alteração foi aplicada.',
+                statusKind: 'error'
+            });
+            return;
+        }
         this.suppressBlockSyncUntil = Date.now() + 750;
         adoptImportedRoots(
             this.props.vm,
             target,
-            result.source,
+            canonicalSource,
             result.importedRootIds,
             result.sourceMap,
-            compilation
+            visualCompilation
         );
+        // A segunda etapa atualiza somente unidades textuais que também mudaram.
+        // Unidades adotadas do Blockly têm o mesmo hash e preservam seus IDs.
+        const record = applyCompilation(this.props.vm, target, compilation);
         this.lastAppliedSource = result.source;
         this.lastBlockFingerprint = blockFingerprint(target);
         this.setState(state => ({
@@ -285,7 +345,11 @@ class TextEditor extends React.Component {
             diagnostics: compilation.diagnostics,
             visualConflict: null,
             blockRefresh: state.blockRefresh + 1,
-            status: `Blocos sincronizados para texto (${result.importedRootIds.length} stack(s), ${result.unsupportedOpcodes.length} opcode(s) em fallback raw).`,
+            status: `${result.semanticMerge && result.semanticMerge.mergedUnits.length ?
+                `${result.semanticMerge.mergedUnits.length} unidade(s) mesclada(s) automaticamente; ` : ''
+            }blocos sincronizados (${result.importedRootIds.length} stack(s), ${
+                result.unsupportedOpcodes.length
+            } opcode(s) em fallback raw, ${record.lastApply && record.lastApply.unchangedUnits || 0} unidade(s) preservada(s)).`,
             statusKind: compilation.success ? 'success' : 'error'
         }));
     }
@@ -393,7 +457,7 @@ class TextEditor extends React.Component {
         this.setState({
             source,
             diagnostics: compilation.diagnostics,
-            status: stored ? 'Fonte carregado do projeto.' : existingBlocks ?
+            status: stored ? 'Fonte carregada do projeto.' : existingBlocks ?
                 'Este alvo já tem blocos. Use “Importar blocos” para convertê-los em texto.' :
                 'Exemplo inicial — edite ou compile para adicioná-lo ao projeto.',
             statusKind: stored ? 'success' : 'idle',
@@ -579,7 +643,9 @@ class TextEditor extends React.Component {
                     <button type="button" onClick={() => this.debugController.resumeAll()}>Continuar todas</button>
                     <span>
                         {snapshot.threads.length} thread(s) · {this.state.breakpoints.length} breakpoint(s) · {
-                            snapshot.interpreterRequired ? 'interpretador para pausa' : snapshot.jitEnabled ? 'JIT ativo' : 'interpretador do projeto'
+                            snapshot.selectiveInterpreter ? 'interpretador somente nos atores com breakpoint' :
+                                snapshot.interpreterRequired ? 'interpretador para pausa global' :
+                                    snapshot.jitEnabled ? 'JIT ativo' : 'interpretador do projeto'
                         }
                     </span>
                 </div>
@@ -591,9 +657,15 @@ class TextEditor extends React.Component {
                                 {thread.paused ? 'pausada' : 'executando'}
                             </span>
                             <strong>{thread.targetName}</strong>
-                            <code>{thread.line ? `linha ${thread.line}` : thread.blockId || 'sem linha'}</code>
+                            <code>
+                                {thread.line ? `linha ${thread.line}` : thread.blockId || 'sem linha'} · {
+                                    thread.executionMode === 'jit' ? 'JIT' : 'interpretador'
+                                }
+                            </code>
                             {thread.paused && <>
-                                <button type="button" onClick={() => this.debugController.stepThread(thread.id)}>Passo</button>
+                                <button type="button" onClick={() => this.debugController.stepThread(thread.id)}>
+                                    {thread.stepGranularity === 'frame' ? 'Passo de frame' : 'Passo'}
+                                </button>
                                 <button type="button" onClick={() => this.debugController.resumeThread(thread.id)}>Continuar</button>
                             </>}
                         </div>
@@ -619,6 +691,12 @@ class TextEditor extends React.Component {
                         <code>{entry.canonicalName}</code>
                         {entry.text && <span>{entry.text}</span>}
                         {entry.kind === 'xml' && entry.xml && <code className={styles.extensionXml}>{entry.xml}</code>}
+                        {entry.kind === 'xml' && entry.xml && (
+                            <button
+                                type="button"
+                                onClick={() => this.handleInsertExtensionXml(entry)}
+                            >Inserir blocos</button>
+                        )}
                         {entry.kind === 'button' && entry.actionId && (
                             <button
                                 type="button"

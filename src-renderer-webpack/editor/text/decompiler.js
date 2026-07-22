@@ -1,6 +1,7 @@
 'use strict';
 
 const {blockRegistry, eventRegistry} = require('./block-registry');
+const {decodeArgumentTypes, decodeParameterIdType, decodeReturnType} = require('./procedure-metadata');
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -160,9 +161,10 @@ const decompileTarget = (target, options = {}) => {
         }
         const procedureCode = String(prototype.mutation.proccode || `procedure_${index + 1}`);
         const rawName = procedureCode.split(/\s+%[sbn]/)[0];
-        const parameterTypes = Array.from(procedureCode.matchAll(/%([sbn])/g)).map(match =>
-            match[1] === 'b' ? 'boolean' : 'any'
+        const fallbackParameterTypes = Array.from(procedureCode.matchAll(/%([sbn])/g)).map((match, parameterIndex) =>
+            decodeParameterIdType(parameterIds[parameterIndex]) || (match[1] === 'b' ? 'boolean' : 'any')
         );
+        const parameterTypes = decodeArgumentTypes(prototype.mutation, fallbackParameterTypes);
         const name = uniqueName(rawName, `procedure_${index + 1}`, usedProcedureNames);
         const usedParameters = new Set();
         const parameters = parameterNames.map((raw, parameterIndex) => ({
@@ -178,7 +180,14 @@ const decompileTarget = (target, options = {}) => {
         } catch (error) { // Invalid legacy mutations are treated as non-warp.
             warp = false;
         }
-        procedureByCode.set(prototype.mutation.proccode, {name, parameters, definition, prototype, warp, returnType: null});
+        procedureByCode.set(prototype.mutation.proccode, {
+            name,
+            parameters,
+            definition,
+            prototype,
+            warp,
+            returnType: decodeReturnType(prototype.mutation)
+        });
     });
 
     const booleanOpcodes = new Set([
@@ -207,7 +216,9 @@ const decompileTarget = (target, options = {}) => {
             visit(block.next);
         };
         visit(procedure.definition.next);
-        if (returns.length) procedure.returnType = returns.every(isBooleanExpressionBlock) ? 'boolean' : 'any';
+        if (!procedure.returnType && returns.length) {
+            procedure.returnType = returns.every(isBooleanExpressionBlock) ? 'boolean' : 'any';
+        }
     });
 
     const expression = (block, guard = new Set()) => {
@@ -435,7 +446,7 @@ const decompileTarget = (target, options = {}) => {
             }
             emit('');
             const parameters = procedure.parameters.map(item =>
-                `${item.name}${item.valueType === 'boolean' ? ': boolean' : ''}`
+                `${item.name}${item.valueType === 'any' ? '' : `: ${item.valueType}`}`
             ).join(', ');
             const modifiers = `${procedure.returnType ? ` -> ${procedure.returnType}` : ''}${procedure.warp ? ' warp' : ''}`;
             emit(`procedure ${procedure.name}(${parameters})${modifiers}:`, root);
