@@ -1,0 +1,99 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+
+const {specialSyntax, syntaxComponents} = require('../../src-renderer-webpack/editor/text/block-coverage');
+const {blockRegistry, controlRegistry, eventRegistry, operatorRegistry} =
+    require('../../src-renderer-webpack/editor/text/block-registry');
+const {
+    buildDocumentationSections,
+    filterDocumentationSections
+} = require('../../src-renderer-webpack/editor/text/documentation-content');
+
+const root = path.resolve(__dirname, '../..');
+const read = name => fs.readFileSync(path.join(root, name), 'utf8');
+const sourceDocuments = {
+    guideMarkdown: read('TEXTWARP.md'),
+    prioritiesMarkdown: read('TEXTWARP_PRIORIDADES.md'),
+    referenceMarkdown: read('TEXTWARP_BLOCOS.md')
+};
+
+test('documentation pane is built from every canonical TextWarp document', () => {
+    const sections = buildDocumentationSections(sourceDocuments);
+    assert.ok(sections.length > 20);
+    assert.equal(new Set(sections.map(section => section.id)).size, sections.length);
+    assert.deepEqual(
+        new Set(sections.map(section => section.group)),
+        new Set(['Manual TextWarp', 'Referência completa', 'Estado do projeto', 'Projeto atual'])
+    );
+    assert.ok(sections.some(section => section.id === 'manual-visao-geral'));
+    assert.ok(sections.some(section => section.id === 'reference-movimento'));
+    assert.ok(sections.some(section => section.id === 'status-alta-prioridade'));
+});
+
+test('runtime documentation references every native syntax and internal component', () => {
+    const sections = buildDocumentationSections(sourceDocuments);
+    const referenceText = sections.filter(section => section.documentId === 'reference')
+        .map(section => section.markdown).join('\n');
+
+    [blockRegistry, controlRegistry, eventRegistry, operatorRegistry].forEach(registry => {
+        Object.values(registry).forEach(metadata => {
+            assert.match(referenceText, new RegExp(metadata.opcode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+            if (metadata.stageOpcode) assert.match(referenceText, new RegExp(metadata.stageOpcode));
+        });
+    });
+    Object.keys(specialSyntax).forEach(opcode => assert.ok(referenceText.includes(opcode), opcode));
+    Object.keys(syntaxComponents).forEach(opcode => assert.ok(referenceText.includes(opcode), opcode));
+});
+
+test('search is accent-insensitive and narrows extension entries without hiding their syntax', () => {
+    const extensionCatalog = {
+        'demo.sayHello': {
+            canonicalName: 'demo.sayHello',
+            extensionId: 'demo',
+            extensionName: 'Demonstração',
+            opcode: 'demo_sayHello',
+            kind: 'command',
+            allowStage: true,
+            allowSprite: true,
+            arguments: [{name: 'message'}],
+            documentation: 'demo.sayHello(message) — mostra uma saudação.'
+        },
+        'demo.answer': {
+            canonicalName: 'demo.answer',
+            extensionId: 'demo',
+            extensionName: 'Demonstração',
+            opcode: 'demo_answer',
+            kind: 'reporter',
+            allowStage: true,
+            allowSprite: false,
+            arguments: [],
+            documentation: 'demo.answer() — retorna uma resposta.'
+        }
+    };
+    const sections = buildDocumentationSections(Object.assign({}, sourceDocuments, {
+        extensionCatalog,
+        extensionPalette: [{
+            canonicalName: 'demo.@button.open',
+            extensionName: 'Demonstração',
+            kind: 'button',
+            text: 'Abrir configuração'
+        }]
+    }));
+
+    const procedureResults = filterDocumentationSections(sections, 'procedimentos parametros');
+    assert.ok(procedureResults.some(section => section.title === 'Procedimentos e parâmetros'));
+
+    const extensionResults = filterDocumentationSections(sections, 'saudacao');
+    assert.equal(extensionResults.length, 1);
+    assert.equal(extensionResults[0].id, 'runtime-extensoes-carregadas');
+    assert.equal(extensionResults[0].entries.length, 1);
+    assert.equal(extensionResults[0].entries[0].syntax, 'demo.sayHello(message)');
+
+    const buttonResults = filterDocumentationSections(sections, 'configuracao');
+    const runtimeButtons = buttonResults.find(section => section.id === 'runtime-extensoes-carregadas');
+    assert.equal(runtimeButtons.palette[0].kind, 'button');
+});

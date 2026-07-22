@@ -167,6 +167,11 @@
     height: 100%;
 }
 
+.documentation-pane {
+    overflow: hidden;
+    background: var(--ui-white);
+}
+
 .split-mode .code-pane {
     right: 50%;
     border-right: 1px solid var(--ui-black-transparent);

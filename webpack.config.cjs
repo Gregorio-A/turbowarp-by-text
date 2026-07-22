@@ -51,6 +51,10 @@ const base = {
                         }
                     }
                 ]
+            },
+            {
+                test: /\.md$/,
+                loader: 'raw-loader'
             }
         ]
     }

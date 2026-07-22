@@ -10,6 +10,7 @@ import {showSaveFilePicker} from '../gui/filesystem-api.js';
 import {compileText} from './compiler';
 import {getDebugController} from './debug-controller';
 import {decompileTarget} from './decompiler';
+import DocumentationPane from './documentation-pane.jsx';
 import {buildExtensionInventory, summarizeExtensionCatalog} from './extension-catalog';
 import MonacoEditor from './monaco-editor.jsx';
 import {mergeVisualSource} from './source-merge';
@@ -741,6 +742,11 @@ class TextEditor extends React.Component {
                             type="button"
                             onClick={() => this.setViewMode('split')}
                         >Dividido</button>
+                        <button
+                            className={this.state.viewMode === 'docs' ? styles.activeTab : ''}
+                            type="button"
+                            onClick={() => this.setViewMode('docs')}
+                        >Documentação</button>
                     </div>
                     <div className={styles.actions}>
                         <button className={styles.toolButton} disabled={!this.state.targetName || this.state.busy} type="button" onClick={this.handleImportBlocks}>Importar blocos</button>
@@ -808,6 +814,16 @@ class TextEditor extends React.Component {
                             theme={this.props.theme}
                             vm={this.props.vm}
                             onOpenCustomExtensionModal={this.props.onOpenCustomExtensionModal}
+                        />
+                    </div>
+                    <div className={classNames(
+                        styles.viewPane,
+                        styles.documentationPane,
+                        this.state.viewMode !== 'docs' && styles.hiddenPane
+                    )}>
+                        <DocumentationPane
+                            extensionCatalog={this.extensionCatalog}
+                            extensionPalette={this.state.extensionPalette}
                         />
                     </div>
                 </div>

@@ -44,7 +44,9 @@ catálogo usado pelo compilador e pode ser conferida com `npm run docs:textwarp:
 3. Aguarde o debounce de 300 ms ou clique em **Compilar**.
 4. Clique em **Executar** ou use a bandeira verde normal.
 5. Use **Blocos** para editar visualmente ou **Dividido** para manter texto e blocos lado a lado.
-6. Clique na margem de uma linha para criar um breakpoint e abra **Depurar** para acompanhar todas as threads.
+6. Abra **Documentação** para consultar o manual, a referência de todos os blocos, as prioridades atuais e as
+   extensões carregadas sem sair do editor. A guia possui índice lateral, busca e cópia dos exemplos.
+7. Clique na margem de uma linha para criar um breakpoint e abra **Depurar** para acompanhar todas as threads.
 
 Alterações válidas no texto são compiladas para o workspace. Alterações no Blockly são decompiladas e mescladas por evento ou procedimento. Unidades que não mudaram conservam comentários, espaçamento e ordem textual; apenas a unidade alterada visualmente recebe a forma canônica do decompilador. Se texto e blocos alterarem unidades diferentes, a mesclagem é automática. A faixa **Manter texto** ou **Usar blocos** aparece somente quando os dois lados alteram semanticamente a mesma unidade ou quando o texto pendente está inválido.
 
