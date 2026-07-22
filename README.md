@@ -1,6 +1,14 @@
-# TurboWarp Desktop
+# TextWarp 0.3 — TurboWarp Desktop com código textual
 
-TurboWarp as a desktop app.
+Este fork adiciona um editor textual Monaco por ator ao TurboWarp Desktop, mantendo a interface, o palco, os recursos, o workspace Blockly e a execução da `scratch-vm`.
+
+A versão atual inclui expressões, variáveis, listas, condições, procedimentos tipados com retorno e modo `warp`, transmissões, clones, eventos e extensões por `extensionId.opcode`, inclusive condicionais e loops com vários braços. O texto é compilado para um grafo real de blocos Scratch e executado pela VM; ele não é convertido diretamente para JavaScript.
+
+Também estão disponíveis sincronização bidirecional com blocos editáveis, fallback textual sem perda para opcodes desconhecidos, breakpoints com threads concorrentes, compilação incremental por evento/procedimento e o pacote editável `.textwarp`. `Ctrl+S` salva a fonte `.textwarp`; o `.sb3` continua disponível como artefato compilado.
+
+Consulte [TEXTWARP.md](TEXTWARP.md) para a sintaxe, arquitetura, limitações e roteiro.
+
+Este repositório continua baseado no TurboWarp Desktop.
 
 If you're looking for downloads, head to: https://desktop.turbowarp.org/
 
@@ -30,8 +38,10 @@ git submodule update
 Install dependencies using:
 
 ```bash
-npm ci
+npm ci --include=dev
 ```
+
+O arquivo `.npmrc` deste fork permite dependências Git, pois `scratch-gui`, `scratch-vm` e outros componentes do TurboWarp são fixados dessa forma.
 
 Then fetch extra library, packager, and extension files using:
 
@@ -65,6 +75,12 @@ Once you have everything compiled and fetched, you are ready to package it up fo
 
 ```bash
 npm run electron:start
+```
+
+Para validar o compilador textual:
+
+```bash
+npm run test:textwarp
 ```
 
 In Linux, The app icon won't work in the development version, but it will work in the packaged version.
