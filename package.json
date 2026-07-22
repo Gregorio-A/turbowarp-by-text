@@ -10,6 +10,7 @@
   "type": "commonjs",
   "scripts": {
     "fetch": "node scripts/download-library-files.mjs && node scripts/download-packager.mjs && node scripts/prepare-extensions.mjs",
+    "test:textwarp": "node --test test/textwarp/*.test.js",
     "webpack:compile": "webpack",
     "webpack:watch": "webpack --watch",
     "webpack:prod": "cross-env NODE_ENV=production webpack",
@@ -17,6 +18,7 @@
     "electron:package:dir": "electron-builder --dir"
   },
   "dependencies": {
+    "monaco-editor": "0.55.1",
     "semver": "^7.7.3"
   },
   "devDependencies": {
@@ -25,6 +27,7 @@
     "@babel/preset-react": "^7.13.13",
     "@electron/fuses": "^2.1.2",
     "@turbowarp/extensions": "github:TurboWarp/extensions#master",
+    "@turbowarp/jszip": "3.12.0",
     "adm-zip": "^0.5.16",
     "autoprefixer": "^9.8.8",
     "babel-loader": "^8.4.1",
@@ -193,6 +196,13 @@
       "license": null
     },
     "fileAssociations": [
+      {
+        "ext": "textwarp",
+        "name": "TextWarp Project",
+        "description": "Editable TextWarp Project",
+        "role": "Editor",
+        "mimeType": "application/x.textwarp+zip"
+      },
       {
         "ext": "sb3",
         "name": "Scratch 3 Project",

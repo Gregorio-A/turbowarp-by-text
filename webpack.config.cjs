@@ -1,5 +1,5 @@
 const path = require('path');
-const {DefinePlugin} = require('webpack');
+const {DefinePlugin, NormalModuleReplacementPlugin} = require('webpack');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 const base = {
@@ -68,8 +68,26 @@ module.exports = [
             new DefinePlugin({
                 'process.env.ROOT': '""'
             }),
+            // Replace only scratch-gui's visual Blockly workspace. All other GUI
+            // components continue to come from the pinned upstream dependency.
+            new NormalModuleReplacementPlugin(
+                /containers[\\/]blocks\.jsx$/,
+                resource => {
+                    const guiComponentPath = path.join('scratch-gui', 'src', 'components', 'gui');
+                    if (resource.context.includes(guiComponentPath)) {
+                        resource.request = path.resolve(
+                            __dirname,
+                            'src-renderer-webpack/editor/text/text-editor.jsx'
+                        );
+                    }
+                }
+            ),
             new CopyWebpackPlugin({
                 patterns: [
+                    {
+                        from: 'node_modules/monaco-editor/min/vs',
+                        to: 'static/monaco/vs'
+                    },
                     {
                         from: 'node_modules/scratch-blocks/media',
                         to: 'static/blocks-media/default'

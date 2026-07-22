@@ -385,10 +385,14 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     this.ipc.handle('show-save-file-picker', async (event, suggestedName) => {
+      const textwarp = typeof suggestedName === 'string' && suggestedName.toLowerCase().endsWith('.textwarp');
       const result = await dialog.showSaveDialog(this.window, {
         defaultPath: path.join(settings.lastDirectory, suggestedName),
         filters: [
-          {
+          textwarp ? {
+            name: 'TextWarp Project',
+            extensions: ['textwarp'],
+          } : {
             name: 'Scratch 3 Project',
             extensions: ['sb3'],
           }

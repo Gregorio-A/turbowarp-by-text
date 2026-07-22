@@ -21,6 +21,8 @@ import {
 } from 'scratch-gui/src/reducers/tw';
 import {WrappedFileHandle} from './filesystem-api.js';
 import {setStrings} from '../prompt/prompt.js';
+import {importTextwarpProject} from '../text/textwarp-package.js';
+import {clearTextwarpHandle, getTextwarpHandle, setTextwarpHandle} from '../text/textwarp-session.js';
 
 let mountedOnce = false;
 
@@ -29,7 +31,7 @@ let mountedOnce = false;
  * @returns {string}
  */
 const getDefaultProjectTitle = (filename) => {
-  const match = filename.match(/([^/\\]+)\.sb[2|3]?$/);
+  const match = filename.match(/([^/\\]+)\.(?:sb[23]?|textwarp)$/i);
   if (!match) return filename;
   return match[1];
 };
@@ -127,7 +129,19 @@ const DesktopHOC = function (WrappedComponent) {
         this.props.onHasInitialProject(true, this.props.loadingState);
         const {name, type, data} = await EditorPreload.getFile(id);
 
-        await this.props.vm.loadProject(data);
+        if (name.toLowerCase().endsWith('.textwarp')) {
+          await importTextwarpProject(this.props.vm, data);
+          if (type === 'file') {
+            const textwarpHandle = new WrappedFileHandle(id, name);
+            setTextwarpHandle(textwarpHandle, name);
+            EditorPreload.openedFile(id);
+          } else {
+            clearTextwarpHandle(name);
+          }
+        } else {
+          clearTextwarpHandle(`${getDefaultProjectTitle(name) || 'project'}.textwarp`);
+          await this.props.vm.loadProject(data);
+        }
         this.props.onLoadingCompleted();
         this.props.onLoadedProject(this.props.loadingState, true);
 
@@ -163,6 +177,8 @@ const DesktopHOC = function (WrappedComponent) {
       if (this.props.fileHandle !== prevProps.fileHandle) {
         if (this.props.fileHandle) {
           EditorPreload.openedFile(this.props.fileHandle.id);
+        } else if (getTextwarpHandle()) {
+          EditorPreload.openedFile(getTextwarpHandle().id);
         } else {
           EditorPreload.closedFile();
         }
