@@ -12,7 +12,9 @@ O projeto mantém somente a infraestrutura local necessária para editar, execut
 - biblioteca, extensões offline, Addons e Packager usados pelo aplicativo;
 - empacotamento local com Electron Builder.
 
-A sintaxe e a arquitetura estão em [TEXTWARP.md](TEXTWARP.md). Problemas abertos e prioridades estão em [TEXTWARP_PRIORIDADES.md](TEXTWARP_PRIORIDADES.md).
+A sintaxe e a arquitetura estão em [TEXTWARP.md](TEXTWARP.md), e o uso de cada bloco está na referência gerada
+[TEXTWARP_BLOCOS.md](TEXTWARP_BLOCOS.md). Problemas abertos e prioridades estão em
+[TEXTWARP_PRIORIDADES.md](TEXTWARP_PRIORIDADES.md).
 
 ## Estrutura necessária
 
@@ -21,7 +23,7 @@ src-main/              processo principal do Electron
 src-preload/           ponte segura entre Electron e renderizadores
 src-renderer/          páginas auxiliares usadas pelo aplicativo
 src-renderer-webpack/  interface do editor e implementação TextWarp
-scripts/               download dos recursos usados em execução
+scripts/               download de recursos e geração da referência de blocos
 build/                 ícones e configuração do empacotamento local
 linux-files/           integração dos pacotes Linux
 test/textwarp/         testes do compilador, VM, pacote e sincronização
@@ -57,6 +59,7 @@ npm run webpack:watch
 
 ```bash
 npm run test:textwarp
+npm run docs:textwarp:check
 npm run webpack:compile
 git diff --check
 ```

@@ -10,6 +10,8 @@
   "type": "commonjs",
   "scripts": {
     "fetch": "node scripts/download-library-files.mjs && node scripts/download-packager.mjs && node scripts/prepare-extensions.mjs",
+    "docs:textwarp": "node scripts/generate-textwarp-block-docs.mjs",
+    "docs:textwarp:check": "node scripts/generate-textwarp-block-docs.mjs --check",
     "test:textwarp": "node --test test/textwarp/*.test.js",
     "webpack:compile": "webpack",
     "webpack:watch": "webpack --watch",

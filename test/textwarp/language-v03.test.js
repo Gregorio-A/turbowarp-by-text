@@ -211,7 +211,7 @@ on green_flag:
     assert.match(decompiled.source, /branch 3:/);
 });
 
-test('round-trips unknown historical and third-party opcodes through raw text', () => {
+test('never writes raw syntax for an unavailable historical or third-party opcode', () => {
     const blocks = {
         root: {
             id: 'root', opcode: 'legacy_when_magic', inputs: {}, fields: {}, next: 'command', parent: null,
@@ -235,19 +235,12 @@ test('round-trips unknown historical and third-party opcodes through raw text', 
         blocks: {_blocks: blocks, getBlock: id => blocks[id]}
     };
     const decompiled = decompileTarget(target);
-    assert.equal(decompiled.success, true);
-    assert.match(decompiled.source, /on raw\.hat\(/);
-    assert.match(decompiled.source, /raw\.command\(/);
-    const recompiled = compileText(decompiled.source, Object.assign({}, actorOptions, {availableOpcodes: []}));
-    assert.equal(recompiled.success, true, JSON.stringify(recompiled.diagnostics));
-    assert.equal(
-        recompiled.diagnostics.filter(item => item.code === 'raw-primitive-unavailable').length,
-        2
-    );
-    assert.deepEqual(
-        new Set(Object.values(recompiled.graph.blocks).map(block => block.opcode)),
-        new Set(['legacy_when_magic', 'vendor_do_thing', 'vendor_value'])
-    );
+    assert.equal(decompiled.success, false);
+    assert.doesNotMatch(decompiled.source, /\braw\./);
+    assert.match(decompiled.source, /Stack não importado: bloco indisponível legacy_when_magic/);
+    assert.deepEqual(decompiled.importedRootIds, []);
+    assert.deepEqual(decompiled.unsupportedRootIds, ['root']);
+    assert.deepEqual(decompiled.unsupportedOpcodes, ['legacy_when_magic']);
 });
 
 test('round-trips the complete motion category and resolves stage variables from actors', () => {

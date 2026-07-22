@@ -18,6 +18,7 @@ Estado revisado em 22 de julho de 2026. Este arquivo é a lista canônica de ris
 | Aceitar blocos podia substituir a fonte inteira e normalizar unidades não alteradas. | A mesclagem de três vias compara hashes por evento e procedimento e substitui somente as unidades visuais alteradas. | Testes preservam comentários, espaços e ordem fora da unidade alterada e mesclam edições independentes. |
 | Um `.textwarp` podia carregar blocos `raw.*` antes das extensões de que dependiam. | O lock restaura extensões internas ou URLs autorizadas antes de carregar o SB3 e interrompe a abertura com erro claro se a dependência não puder ser restaurada. | Testes cobrem restauração, URL ausente e lock do pacote. |
 | **Pausar threads** não suspendia uma thread que já estava no JIT. | O depurador congela o gerador compilado na próxima fronteira de frame, preserva seu estado e permite avançar um frame ou retomá-lo. | Teste unitário do controlador e teste integrado com uma thread JIT real. |
+| Famílias inteiras de blocos não tinham sintaxe e eram decompiladas como `raw.*`. | Todas as 140 primitivas e os 9 hats nativos possuem chamada nomeada, controle, evento ou sintaxe própria. Blocos carregados por extensão recebem sintaxe de `getInfo()`; o decompilador não escreve mais `raw.*`. | A auditoria falha para qualquer opcode sem cobertura e testa o round-trip de cada chamada, evento, controle, operador, sintaxe especial e tipo de bloco de extensão. |
 
 ## Média prioridade
 
@@ -25,7 +26,7 @@ Estado revisado em 22 de julho de 2026. Este arquivo é a lista canônica de ris
 | --- | --- | --- | --- |
 | Texto e blocos alteram semanticamente o mesmo evento, procedimento ou declarações. | Não existe uma ordem semanticamente correta que possa ser inferida em todos os casos. | O editor não sobrescreve silenciosamente: mostra o conflito e exige **Manter texto** ou **Usar blocos**. Unidades independentes já são mescladas. | Fazer uma mesclagem por instrução dentro da unidade e continuar pedindo escolha somente quando a mesma instrução mudar nos dois lados. |
 | Uma unidade alterada visualmente perde comentários e espaçamento internos. | O grafo Scratch não armazena esses tokens; apenas a unidade realmente alterada volta à forma canônica. | Todo o restante do arquivo conserva conteúdo e ordem textual. | Associar comentários a IDs de blocos em metadados TextWarp opcionais. |
-| Um `.sb3` avulso perdeu a URL da extensão, ou a permissão para carregar código de terceiros foi negada. | `raw.*` pode ser preservado, mas a primitiva não pode executar. | O compilador avisa qual opcode não está carregado; `.textwarp` conserva identificador e URL no lock, passa pelo sandbox e pela autorização atuais do TurboWarp e falha explicitamente ao restaurar uma dependência inválida. | Oferecer uma tela para o usuário localizar novamente uma URL perdida, sem contornar a decisão de segurança. |
+| Um `.sb3` avulso perdeu a URL da extensão, ou a permissão para carregar código de terceiros foi negada. | Sem carregar `getInfo()` e a primitiva não existe como código executável no runtime. | `.textwarp` conserva identificador e URL no lock, passa pelo sandbox e pela autorização atuais do TurboWarp e falha explicitamente ao restaurar uma dependência inválida. Em um SB3 avulso, o stack desconhecido permanece visual e não é adotado nem sobrescrito pelo texto. | Oferecer uma tela para o usuário localizar novamente uma URL perdida, sem contornar a decisão de segurança. |
 | Procedimentos com retorno não funcionam no site oficial do Scratch. | O Scratch oficial não implementa `procedures_return` nem chamada de procedimento como repórter. | Cada declaração `-> tipo` gera aviso de compatibilidade no editor. Projetos destinados ao Scratch devem usar procedimentos de comando. | Criar um verificador/exportador de compatibilidade que proponha transformações quando uma equivalência por variável for segura. |
 | Breakpoints exatos exigem o interpretador para as novas threads do ator afetado. | Esse ator fica mais lento enquanto o breakpoint estiver ativo. | Atores sem breakpoint continuam no JIT. Threads JIT alcançadas por pausa global permanecem compiladas e usam passo de frame. | Instrumentação opcional do compilador para breakpoints JIT com granularidade de bloco. |
 
@@ -47,8 +48,11 @@ As verificações obrigatórias para manter a seção de alta prioridade vazia s
 
 ```bash
 npm run test:textwarp
+npm run docs:textwarp:check
 npm run webpack:compile
 git diff --check
 ```
 
-Resultado desta revisão: **32/32 testes passaram**, o bundle Webpack foi gerado com sucesso e `git diff --check` não encontrou erros. O Webpack manteve apenas avisos preexistentes sobre Browserslist desatualizado e assets `index.js` duplicados.
+Resultado desta revisão: **42/42 testes passaram**; a auditoria cobriu **140/140 primitivas**, **9/9 hats** e todos
+os componentes visuais nativos; a referência gerada estava sincronizada; o bundle Webpack foi criado; e
+`git diff --check` não encontrou erros. O Webpack manteve apenas avisos preexistentes de Browserslist, Babel e Tapable.

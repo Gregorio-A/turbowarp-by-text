@@ -1,6 +1,7 @@
 'use strict';
 
 const {blockRegistry, eventRegistry} = require('./block-registry');
+const {dynamicMetadata} = require('./extension-catalog');
 const {decodeArgumentTypes, decodeParameterIdType, decodeReturnType} = require('./procedure-metadata');
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -61,6 +62,17 @@ const buildReverseExtensions = catalog => Object.values(catalog || {}).reduce((r
 
 const decompileTarget = (target, options = {}) => {
     const extensionByOpcode = buildReverseExtensions(options.extensionCatalog);
+    const extensionForBlock = block => {
+        const base = block && extensionByOpcode[block.opcode];
+        if (!base || !base.isDynamic || !block.mutation || !block.mutation.blockInfo) return base;
+        try {
+            const info = typeof block.mutation.blockInfo === 'string' ?
+                JSON.parse(block.mutation.blockInfo) : block.mutation.blockInfo;
+            return dynamicMetadata(base, info);
+        } catch (error) {
+            return base;
+        }
+    };
     const variableNames = new Map();
     const procedureByCode = new Map();
     const usedProcedureNames = new Set();
@@ -117,36 +129,6 @@ const decompileTarget = (target, options = {}) => {
 
     const allBlocks = target.blocks && target.blocks._blocks ? Object.values(target.blocks._blocks) : [];
 
-    const serializeRawBlock = (block, guard = new Set(), includePosition = false) => {
-        if (!block || guard.has(block.id)) return {opcode: 'textwarp_recursive_reference'};
-        const nextGuard = new Set(guard);
-        nextGuard.add(block.id);
-        const payload = {
-            opcode: block.opcode,
-            shadow: Boolean(block.shadow),
-            fields: JSON.parse(JSON.stringify(block.fields || {})),
-            inputs: {}
-        };
-        if (block.mutation) payload.mutation = JSON.parse(JSON.stringify(block.mutation));
-        if (includePosition) {
-            if (Number.isFinite(block.x)) payload.x = block.x;
-            if (Number.isFinite(block.y)) payload.y = block.y;
-        }
-        Object.entries(block.inputs || {}).forEach(([name, input]) => {
-            const child = getBlock(target, input.block);
-            const shadow = getBlock(target, input.shadow);
-            payload.inputs[name] = {
-                block: child ? serializeRawBlock(child, nextGuard) : null,
-                shadow: shadow && child && shadow.id === child.id ? true :
-                    shadow ? serializeRawBlock(shadow, nextGuard) : null
-            };
-        });
-        return payload;
-    };
-
-    const rawCall = (kind, block, includePosition = false) =>
-        `raw.${kind}(${quote(JSON.stringify(serializeRawBlock(block, new Set(), includePosition)))})`;
-
     allBlocks.filter(block => block.opcode === 'procedures_definition').forEach((definition, index) => {
         const prototype = activeInputBlock(target, definition, 'custom_block');
         if (!prototype || !prototype.mutation) return;
@@ -199,7 +181,7 @@ const decompileTarget = (target, options = {}) => {
     const isBooleanExpressionBlock = block => Boolean(block && (
         booleanOpcodes.has(block.opcode) ||
         block.opcode === 'procedures_call' && Number(block.mutation && block.mutation.return) === 2 ||
-        extensionByOpcode[block.opcode] && extensionByOpcode[block.opcode].kind === 'boolean'
+        extensionForBlock(block) && extensionForBlock(block).kind === 'boolean'
     ));
     procedureByCode.forEach(procedure => {
         const returns = [];
@@ -233,6 +215,11 @@ const decompileTarget = (target, options = {}) => {
         }
         if (block.opcode === 'text') return {text: quote(fieldValue(block, 'TEXT')), supported: true};
         if (block.opcode === 'colour_picker') return {text: quote(fieldValue(block, 'COLOUR')), supported: true};
+        if (block.opcode === 'data_listindexall' || block.opcode === 'data_listindexrandom') {
+            const raw = fieldValue(block, 'INDEX', 1);
+            const number = Number(raw);
+            return {text: Number.isFinite(number) ? String(number) : quote(raw), supported: true};
+        }
         if (block.opcode === 'data_variable' || block.opcode === 'data_listcontents') {
             const field = block.opcode === 'data_variable' ? block.fields.VARIABLE : block.fields.LIST;
             const type = block.opcode === 'data_variable' ? '' : 'list';
@@ -265,29 +252,53 @@ const decompileTarget = (target, options = {}) => {
             return {text: `(${left.text} ${operator} ${right.text})`, supported: left.supported && right.supported};
         }
         const registered = reverseCore[block.opcode];
-        const extension = extensionByOpcode[block.opcode];
+        const extension = extensionForBlock(block);
         const call = registered || (extension ? {name: extension.canonicalName, metadata: extension} : null);
         if (call && ['reporter', 'boolean'].includes(call.metadata.kind)) {
             const args = decompileArguments(block, call.metadata, nextGuard);
             return {text: `${call.name}(${args.values.join(', ')})`, supported: args.supported};
         }
         unsupportedOpcodes.add(block.opcode);
-        return {text: rawCall('reporter', block), supported: true};
+        return {text: '0', supported: false};
+    };
+
+    const literalArgument = (value, metadata) => {
+        if (metadata.valueType === 'number') {
+            const number = Number(value);
+            if (Number.isFinite(number)) return String(number);
+        }
+        if (metadata.valueType === 'boolean') return String(value).toLowerCase() === 'true' ? 'true' : 'false';
+        return quote(value);
     };
 
     const inputOrField = (block, metadata, guard) => {
-        if (metadata.role === 'list') {
+        if (metadata.role === 'list' || metadata.role === 'variable') {
             const field = block.fields && block.fields[metadata.field];
-            const name = field && (variableNames.get(field.id) || variableNames.get(`list:${field.value}`));
-            return {text: name || sanitizeIdentifier(field && field.value, 'unknown_list'), supported: Boolean(name)};
+            const type = metadata.role === 'list' ? 'list' : '';
+            const name = field && (variableNames.get(field.id) || variableNames.get(`${type}:${field.value}`));
+            return {
+                text: name || sanitizeIdentifier(field && field.value, metadata.role === 'list' ? 'unknown_list' : 'unknown_variable'),
+                supported: Boolean(name)
+            };
         }
         if (metadata.role === 'field' || metadata.role === 'broadcast-field') {
-            return {text: quote(fieldValue(block, metadata.field)), supported: true};
+            return {text: literalArgument(fieldValue(block, metadata.field), metadata), supported: true};
         }
         const child = activeInputBlock(target, block, metadata.input);
         if (metadata.role === 'menu' || metadata.role === 'broadcast') {
             const fieldName = metadata.role === 'broadcast' ? 'BROADCAST_OPTION' : metadata.menuField;
-            if (child && child.shadow) return {text: quote(fieldValue(child, fieldName, metadata.defaultValue || '')), supported: true};
+            const fallback = Object.prototype.hasOwnProperty.call(metadata, 'defaultValue') ? metadata.defaultValue : '';
+            if (child && child.shadow) return {
+                text: literalArgument(fieldValue(child, fieldName, fallback), metadata),
+                supported: true
+            };
+        }
+        if (child && child.shadow && metadata.shadowField) {
+            const fallback = Object.prototype.hasOwnProperty.call(metadata, 'defaultValue') ? metadata.defaultValue : '';
+            return {
+                text: literalArgument(fieldValue(child, metadata.shadowField, fallback), metadata),
+                supported: true
+            };
         }
         return expression(child, guard);
     };
@@ -324,10 +335,12 @@ const decompileTarget = (target, options = {}) => {
                     block.opcode === 'data_setvariableto' ? '=' : '+='
                 } ${value.text}`;
                 blockSupported = Boolean(name) && value.supported;
-            } else if (block.opcode === 'control_repeat' || block.opcode === 'control_repeat_until') {
+            } else if (['control_repeat', 'control_repeat_until', 'control_while'].includes(block.opcode)) {
                 const input = block.opcode === 'control_repeat' ? 'TIMES' : 'CONDITION';
                 const value = expression(activeInputBlock(target, block, input));
-                line = `${prefix}${block.opcode === 'control_repeat' ? 'repeat' : 'repeat_until'}(${value.text}):`;
+                const name = block.opcode === 'control_repeat' ? 'repeat' :
+                    block.opcode === 'control_while' ? 'while' : 'repeat_until';
+                line = `${prefix}${name}(${value.text}):`;
                 nested = sequence(block.inputs.SUBSTACK && block.inputs.SUBSTACK.block, indent + 4, visited);
                 blockSupported = value.supported && nested.supported;
             } else if (block.opcode === 'control_forever') {
@@ -355,11 +368,14 @@ const decompileTarget = (target, options = {}) => {
                     line = `${prefix}${procedure.name}(${values.map(item => item.text).join(', ')})`;
                     blockSupported = values.every(item => item.supported);
                 }
-            } else if (block.opcode === 'control_stop' && fieldValue(block, 'STOP_OPTION') === 'all') {
-                line = `${prefix}stop_all()`;
+            } else if (block.opcode === 'control_stop') {
+                const option = fieldValue(block, 'STOP_OPTION');
+                const name = option === 'this script' ? 'stop_this_script' :
+                    option === 'other scripts in sprite' ? 'stop_other_scripts' : 'stop_all';
+                line = `${prefix}${name}()`;
             } else {
                 const registered = reverseCore[block.opcode];
-                const extension = extensionByOpcode[block.opcode];
+                const extension = extensionForBlock(block);
                 const call = registered || (extension ? {name: extension.canonicalName, metadata: extension} : null);
                 if (call && call.metadata.kind === 'command') {
                     const args = decompileArguments(block, call.metadata, new Set());
@@ -384,8 +400,8 @@ const decompileTarget = (target, options = {}) => {
 
             if (!line) {
                 unsupportedOpcodes.add(block.opcode);
-                line = `${prefix}${rawCall('command', block)}`;
-                blockSupported = true;
+                line = `${prefix}pass # bloco indisponível: ${block.opcode}`;
+                blockSupported = false;
             }
             lines.push({text: line, block});
             if (Array.isArray(nested)) lines.push(...nested);
@@ -414,7 +430,7 @@ const decompileTarget = (target, options = {}) => {
             return {text: `on ${menu === 'TIMER' ? 'timer' : 'loudness'}_greater_than(${value.text}):`, supported: value.supported};
         }
         const registered = eventByOpcode[block.opcode];
-        const extension = extensionByOpcode[block.opcode];
+        const extension = extensionForBlock(block);
         const event = registered || (extension && ['hat', 'event'].includes(extension.kind) ? {
             name: extension.canonicalName,
             metadata: extension
@@ -461,13 +477,8 @@ const decompileTarget = (target, options = {}) => {
         if (!header) {
             unsupportedOpcodes.add(root.opcode);
             emit('');
-            const runtimeHats = target.runtime && target.runtime._hats;
-            const kind = runtimeHats && runtimeHats[root.opcode] || /(?:^|_)when|^event_/.test(root.opcode) ? 'hat' : 'stack';
-            emit(`on ${rawCall(kind, root, true)}:`, root);
-            const body = sequence(root.next, 4);
-            if (body.lines.length) body.lines.forEach(item => emit(item.text, item.block));
-            else emit('    pass');
-            importedRootIds.push(root.id);
+            emit(`# Stack não importado: bloco indisponível ${root.opcode}`, root);
+            unsupportedRootIds.push(root.id);
             return;
         }
         emit('');

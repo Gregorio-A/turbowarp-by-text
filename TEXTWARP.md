@@ -34,6 +34,9 @@ npm run test:textwarp
 npm run webpack:compile
 ```
 
+A lista de sintaxe e uso de cada bloco está em [TEXTWARP_BLOCOS.md](TEXTWARP_BLOCOS.md). Ela é gerada do mesmo
+catálogo usado pelo compilador e pode ser conferida com `npm run docs:textwarp:check`.
+
 ## Fluxo no editor
 
 1. Selecione o palco ou um ator.
@@ -45,7 +48,10 @@ npm run webpack:compile
 
 Alterações válidas no texto são compiladas para o workspace. Alterações no Blockly são decompiladas e mescladas por evento ou procedimento. Unidades que não mudaram conservam comentários, espaçamento e ordem textual; apenas a unidade alterada visualmente recebe a forma canônica do decompilador. Se texto e blocos alterarem unidades diferentes, a mesclagem é automática. A faixa **Manter texto** ou **Usar blocos** aparece somente quando os dois lados alteram semanticamente a mesma unidade ou quando o texto pendente está inválido.
 
-O botão **Importar blocos** também faz uma conversão explícita do alvo. Opcodes sem conversor específico usam `raw.command`, `raw.reporter`, `raw.hat` ou `raw.stack`, preservando campos, mutation e entradas em vez de abandonar o stack.
+O botão **Importar blocos** também faz uma conversão explícita do alvo. Todos os opcodes carregados no runtime têm
+sintaxe nativa, especial ou gerada de `getInfo()`. Se um `.sb3` contiver um opcode cuja extensão não está carregada,
+o stack visual permanece preservado e marcado como não importado; o decompilador não inventa uma chamada nem escreve
+`raw.*`. O parser ainda lê `raw.*` de arquivos TextWarp antigos somente para compatibilidade de migração.
 
 `Ctrl+S` salva no arquivo `.textwarp` aberto e `Ctrl+Shift+S` escolhe outro arquivo. **Salvar como…** faz a mesma exportação editável; **Abrir .textwarp** abre o pacote. O fluxo padrão do TurboWarp continua disponível para gerar `.sb3` como artefato compilado.
 
@@ -138,7 +144,7 @@ forever:
     wait(0)
 ```
 
-`while condition` é compilado como o bloco Scratch `repeat until not condition`.
+`while condition` preserva o opcode legado `control_while`; não é convertido em outro bloco visual.
 
 ### Procedimentos e parâmetros
 
@@ -205,60 +211,15 @@ on clone_started:
 
 `clone_started` só é válido em atores. O evento `clicked` escolhe automaticamente `event_whenstageclicked` ou `event_whenthisspriteclicked` conforme o alvo.
 
-### Comandos e repórteres principais
+### Catálogo completo de blocos
 
-Movimento:
+A referência [TEXTWARP_BLOCOS.md](TEXTWARP_BLOCOS.md) documenta individualmente Movimento, Aparência, Som,
+Eventos, Controle, Sensores, Operadores, Dados, procedimentos e os blocos legados ainda reconhecidos pela VM.
+Ela inclui os valores internos de menus, o opcode Scratch correspondente, o tipo do bloco e o uso de cada chamada.
 
-```text
-move(steps)
-turn_right(degrees)
-turn_left(degrees)
-point_in_direction(direction)
-point_towards(target)
-go_to(x, y)
-go_to_target(target)
-glide_to(seconds, x, y)
-glide_to_target(seconds, target)
-change_x(amount)
-set_x(value)
-change_y(amount)
-set_y(value)
-if_on_edge_bounce()
-set_rotation_style(style)
-x_position()
-y_position()
-direction()
-```
-
-Os alvos especiais dos menus são `"_mouse_"` e `"_random_"`. Os estilos de rotação aceitos são `"all around"`, `"left-right"` e `"don't rotate"`.
-
-Aparência e controle:
-
-```text
-say(message)
-say_for(message, seconds)
-think(message)
-show()
-hide()
-wait(seconds)
-stop_all()
-```
-
-Sensores e operadores:
-
-```text
-key_pressed(key)
-touching(object)
-mouse_down()
-timer()
-answer()
-random(from, to)
-round(value)
-join(left, right)
-letter(index, text)
-length(text)
-contains(text, part)
-```
+O catálogo desta versão contém 111 chamadas nativas nomeadas, 6 controles estruturais, 9 formas de evento, 11
+operadores e 9 opcodes cobertos por sintaxe própria de variáveis, listas e procedimentos. A auditoria considera ainda
+as sombras visuais e menus: eles são documentados como componentes do argumento, não como instruções fictícias.
 
 ## Extensões
 
@@ -290,7 +251,11 @@ on green_flag:
         say("terceiro braço")
 ```
 
-O painel **Extensões** lista também botões, labels, separadores e XML publicados por `getInfo()`. Botões próprios da extensão podem ser acionados no painel, e itens XML oferecem **Inserir blocos**, que os adiciona ao workspace oficial e abre a visualização dividida. Labels e separadores continuam sendo elementos de apresentação, não comandos fictícios da linguagem. Os blocos inseridos por XML são decompilados normalmente ou pelo fallback `raw.*`.
+O painel **Extensões** lista também botões, labels, separadores e XML publicados por `getInfo()`. Botões próprios da
+extensão podem ser acionados no painel, e itens XML oferecem **Inserir blocos**, que os adiciona ao workspace oficial
+e abre a visualização dividida. Labels e separadores continuam sendo elementos de apresentação, não comandos
+fictícios da linguagem. Cada bloco executável inserido por XML usa seu catálogo carregado; um opcode indisponível
+permanece no workspace e não é adotado como texto.
 
 O TextWarp não muda o modelo de segurança: extensões sandboxed continuam isoladas e extensões unsandboxed continuam executando com privilégios elevados.
 
@@ -315,23 +280,30 @@ project.textwarp
 
 As fontes em `sources/` são canônicas. Ao abrir o pacote, cada módulo é compilado novamente; se uma fonte tiver erro, o SB3 compilado permanece carregado e os diagnósticos são informados. `compiled/project.sb3` permite execução e compatibilidade com as ferramentas existentes, enquanto `project/` e `assets/` deixam os recursos explícitos no pacote.
 
-Antes de desserializar o SB3, o importador restaura as dependências registradas em `extensions/lock.json`. Extensões internas são carregadas pelo identificador e extensões por URL passam pelo mesmo pedido de permissão e pelo mesmo sandbox do TurboWarp. URL ausente, permissão negada ou uma URL que registre outro identificador interrompem a abertura com uma mensagem explícita; o projeto não segue silenciosamente com blocos `raw.*` inertes.
+Antes de desserializar o SB3, o importador restaura as dependências registradas em `extensions/lock.json`. Extensões
+internas são carregadas pelo identificador e extensões por URL passam pelo mesmo pedido de permissão e pelo mesmo
+sandbox do TurboWarp. URL ausente, permissão negada ou uma URL que registre outro identificador interrompem a
+abertura com uma mensagem explícita; o projeto não segue silenciosamente com blocos de terceiros inertes.
 
 O handle de `.textwarp` é mantido separado do handle de `.sb3`, evitando sobrescrever um formato com o outro. `Ctrl+S` grava o pacote editável atual; `Ctrl+Shift+S` e **Salvar como…** escolhem outro destino. A exportação padrão do TurboWarp continua produzindo `.sb3`.
 
 ## Importação de blocos
 
-O decompilador reconhece os eventos, controles, dados, procedimentos com retorno, expressões e extensões presentes no catálogo da versão atual. Ele:
+O decompilador reconhece todos os eventos, controles, dados, procedimentos com retorno, expressões e extensões
+presentes no catálogo da versão atual. Ele:
 
 - cria declarações para variáveis e listas do alvo;
 - reconstrói procedimentos e parâmetros;
 - gera fonte com quatro espaços;
 - produz um source map novo;
 - representa condicionais de extensão com qualquer `branchCount`;
-- encapsula qualquer opcode restante em JSON textual `raw.*`, mantendo campos, mutation, shadows e entradas;
-- adota todos os stacks que puder reconstruir sem perda estrutural.
+- nunca escreve `raw.*` para representar um bloco;
+- adota todos os stacks que puder reconstruir sem perda estrutural;
+- mantém no workspace e fora da fonte qualquer stack cujo opcode não esteja carregado, evitando sobrescrita ou falsa compatibilidade.
 
-Nomes Scratch que não são identificadores válidos são normalizados. O fallback `raw.*` é deliberadamente verboso e serve como escape hatch de compatibilidade, não como sintaxe recomendada para código escrito à mão.
+Nomes Scratch que não são identificadores válidos são normalizados. Identificadores de extensão incompatíveis com a
+gramática são codificados de forma estável como `encoded_<pontos-de-código>`. `raw.*` é aceito apenas ao abrir fontes
+antigas e não aparece no autocomplete, na documentação de escrita nem na saída do decompilador.
 
 ## Edição visual sincronizada
 
@@ -390,6 +362,7 @@ Módulos principais em `src-renderer-webpack/editor/text/`:
 
 - `parser.js`: linhas, indentação e parser de expressões;
 - `block-registry.js`: catálogo canônico dos blocos principais;
+- `block-coverage.js`: auditoria exaustiva de primitivas, hats e componentes de sintaxe;
 - `extension-catalog.js`: adaptação automática de `getInfo()`;
 - `compiler.js`: semântica, IR, unidades, hashes, source map e grafo;
 - `vm-adapter.js`: atualização incremental, dados e persistência;
@@ -418,7 +391,8 @@ A classificação canônica e o histórico dos riscos altos corrigidos estão em
 
 - a unidade alterada visualmente é emitida na forma canônica, pois comentários e espaços dentro dela não existem no grafo Scratch; o restante do arquivo não é normalizado;
 - duas alterações semanticamente diferentes no mesmo evento, procedimento ou conjunto de declarações ainda exigem escolher **Manter texto** ou **Usar blocos**; unidades independentes são mescladas automaticamente;
-- `raw.*` executa depois que sua primitiva é carregada. O compilador avisa quando o opcode não está disponível. O `.textwarp` restaura dependências pelo lock, mas um `.sb3` avulso que perdeu a URL da extensão ou um pacote cuja permissão foi negada não pode fornecer código de terceiros por conta própria;
+- um `.sb3` avulso que perdeu a URL da extensão ou um pacote cuja permissão foi negada não pode fornecer código de
+  terceiros por conta própria; nesse caso o stack permanece visual, não é convertido em texto e não é sobrescrito;
 - atores com breakpoint usam o interpretador e ficam mais lentos; atores sem breakpoint continuam no JIT. Uma thread JIT pausada preserva o gerador e avança por frame, enquanto o passo por bloco exige o interpretador;
 - procedimentos com retorno são um recurso do TurboWarp e geram aviso de compatibilidade. Para publicar no site oficial do Scratch, use procedimentos de comando sem `-> tipo` e sem `return`, pois o Scratch oficial não implementa `procedures_return` nem chamadas de procedimento como repórter;
 - se uma ferramenta externa remover os atributos TextWarp e também regenerar os IDs dos parâmetros, os encaixes `%s` voltam ao tipo seguro `any`; retornos redondos também voltam a `any` se `textwarp_return_type` for removido, pois o formato Scratch distingue apenas retorno redondo e booleano.

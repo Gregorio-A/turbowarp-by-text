@@ -82,7 +82,7 @@ test('restores locked extension dependencies before a project is compiled', asyn
     assert.deepEqual(permissions, ['https://example.com/physics.js']);
 });
 
-test('rejects a missing locked URL instead of silently keeping raw blocks inert', async () => {
+test('rejects a missing locked URL instead of silently keeping third-party blocks inert', async () => {
     const vm = {
         extensionManager: {
             isExtensionLoaded: () => false,

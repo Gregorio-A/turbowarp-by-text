@@ -80,6 +80,20 @@ const configureLanguage = monaco => {
                     insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
                 },
                 {
+                    label: 'repeat_until',
+                    kind: snippet,
+                    documentation: controlRegistry.repeat_until.documentation,
+                    insertText: 'repeat_until(${1:true}):\n    ${2:wait(0)}',
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                },
+                {
+                    label: 'while',
+                    kind: snippet,
+                    documentation: controlRegistry.while.documentation,
+                    insertText: 'while(${1:true}):\n    ${2:wait(0)}',
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                },
+                {
                     label: 'if',
                     kind: snippet,
                     documentation: 'Condição com ramificações opcionais.',
@@ -129,33 +143,50 @@ const configureLanguage = monaco => {
             });
             Object.entries(blockRegistry).forEach(([name, metadata]) => {
                 const placeholders = metadata.arguments.map((argument, index) => {
-                    const example = argument.valueType === 'string' || ['menu', 'broadcast'].includes(argument.role) ?
-                        '"value"' : argument.role === 'list' ? 'items' : argument.name === 'seconds' ? '1' : '10';
+                    const example = argument.role === 'list' ? 'items' : argument.role === 'variable' ? 'value' :
+                        argument.valueType === 'boolean' ? 'true' :
+                            argument.valueType === 'string' || ['menu', 'broadcast', 'field'].includes(argument.role) ?
+                                '"value"' : argument.name === 'seconds' ? '1' : '10';
                     return `\${${index + 1}:${example}}`;
                 });
+                const bodyPlaceholder = placeholders.length + 1;
+                let insertText = `${name}(${placeholders.join(', ')})`;
+                if (['conditional', 'loop'].includes(metadata.kind)) {
+                    insertText += `:\n    \${${bodyPlaceholder}:wait(0)}`;
+                    for (let branch = 2; branch <= Math.max(1, Number(metadata.branchCount) || 1); branch++) {
+                        insertText += `\nbranch ${branch}:\n    \${${bodyPlaceholder + branch - 1}:wait(0)}`;
+                    }
+                }
                 suggestions.push({
                     label: name,
                     kind: monaco.languages.CompletionItemKind.Function,
                     documentation: metadata.documentation,
-                    insertText: `${name}(${placeholders.join(', ')})`,
+                    insertText,
                     insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
                 });
             });
             Object.values(window.__textwarpExtensionCatalog || {}).forEach(metadata => {
                 const placeholders = (metadata.arguments || []).map((argument, index) => {
-                    const example = argument.valueType === 'number' ? '1' : '"value"';
+                    const example = argument.valueType === 'number' ? '1' :
+                        argument.valueType === 'boolean' ? 'true' : '"value"';
                     return `\${${index + 1}:${example}}`;
                 });
+                const bodyPlaceholder = placeholders.length + 1;
+                let insertText = `${metadata.canonicalName}(${placeholders.join(', ')})`;
+                if (metadata.kind === 'hat' || metadata.kind === 'event') {
+                    insertText = `on ${insertText}:\n    \${${bodyPlaceholder}:wait(0)}`;
+                } else if (['conditional', 'loop'].includes(metadata.kind)) {
+                    insertText += `:\n    \${${bodyPlaceholder}:wait(0)}`;
+                    for (let branch = 2; branch <= Math.max(1, Number(metadata.branchCount) || 1); branch++) {
+                        insertText += `\nbranch ${branch}:\n    \${${bodyPlaceholder + branch - 1}:wait(0)}`;
+                    }
+                }
                 suggestions.push({
                     label: metadata.canonicalName,
                     kind: metadata.kind === 'hat' || metadata.kind === 'event' ? snippet :
                         monaco.languages.CompletionItemKind.Function,
                     documentation: metadata.documentation,
-                    insertText: metadata.kind === 'hat' || metadata.kind === 'event' ?
-                        `on ${metadata.canonicalName}(${placeholders.join(', ')}):\n    \${${placeholders.length + 1}:wait(0)}` :
-                        ['conditional', 'loop'].includes(metadata.kind) ?
-                            `${metadata.canonicalName}(${placeholders.join(', ')}):\n    \${${placeholders.length + 1}:wait(0)}` :
-                            `${metadata.canonicalName}(${placeholders.join(', ')})`,
+                    insertText,
                     insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
                 });
             });

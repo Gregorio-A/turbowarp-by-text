@@ -6,6 +6,7 @@ const {
     eventRegistry,
     operatorRegistry
 } = require('./block-registry');
+const {resolveDynamicMetadata} = require('./extension-catalog');
 const {parseText} = require('./parser');
 const {encodeParameterId, encodeProcedureTypes} = require('./procedure-metadata');
 
@@ -258,12 +259,13 @@ const analyzeAndBuildIR = (ast, options = {}) => {
         });
     };
 
-    const resolveMetadata = name => blockRegistry[name] || extensionCatalog[name] || null;
+    const resolveMetadata = name => blockRegistry[name] || extensionCatalog[name] ||
+        resolveDynamicMetadata(name, extensionCatalog) || null;
 
     const decodeRawPayload = (call, location, kind) => {
         if (call.arguments.length !== 1 || call.arguments[0].type !== 'Literal' || call.arguments[0].valueType !== 'string') {
             diagnostics.push(semanticDiagnostic(
-                `"raw.${kind}" recebe exatamente uma string JSON gerada pelo decompilador.`,
+                `A sintaxe legada "raw.${kind}" recebe exatamente o payload JSON de uma fonte TextWarp antiga.`,
                 location,
                 'invalid-raw-payload'
             ));
@@ -273,7 +275,7 @@ const analyzeAndBuildIR = (ast, options = {}) => {
             const payload = JSON.parse(call.arguments[0].value);
             if (!payload || typeof payload.opcode !== 'string' || !payload.opcode) throw new Error('opcode ausente');
             if (availableOpcodes && !availableOpcodes.has(payload.opcode)) diagnostics.push(semanticDiagnostic(
-                `A primitiva "${payload.opcode}" de raw.${kind} não está carregada; o bloco será preservado, mas não executará até que sua extensão seja autorizada e carregada.`,
+                `A primitiva "${payload.opcode}" da sintaxe legada raw.${kind} não está carregada; o bloco será preservado, mas não executará até que sua extensão seja autorizada e carregada.`,
                 location,
                 'raw-primitive-unavailable',
                 'warning'
@@ -292,6 +294,9 @@ const analyzeAndBuildIR = (ast, options = {}) => {
     const validateAvailability = (name, metadata, location) => {
         if (isStage && metadata.allowStage === false) diagnostics.push(semanticDiagnostic(
             `"${name}" só pode ser usado em atores.`, location, 'command-not-allowed-on-stage'
+        ));
+        if (!isStage && metadata.allowSprite === false) diagnostics.push(semanticDiagnostic(
+            `"${name}" só pode ser usado no palco.`, location, 'command-not-allowed-on-sprite'
         ));
     };
 
@@ -314,18 +319,34 @@ const analyzeAndBuildIR = (ast, options = {}) => {
         ));
         return expected.map((argumentMetadata, index) => {
             const node = argumentNodes[index];
-            if (!node) return literal(argumentMetadata.defaultValue || 0, 'number', location);
-            if (argumentMetadata.role === 'list') {
+            if (!node) {
+                const defaultValue = Object.prototype.hasOwnProperty.call(argumentMetadata, 'defaultValue') ?
+                    argumentMetadata.defaultValue : argumentMetadata.valueType === 'boolean' ? false :
+                        argumentMetadata.valueType === 'string' ? '' : 0;
+                return literal(defaultValue, argumentMetadata.valueType || 'any', location);
+            }
+            if (argumentMetadata.role === 'list' || argumentMetadata.role === 'variable') {
                 if (node.type !== 'Identifier') {
                     diagnostics.push(semanticDiagnostic(
-                        `O argumento "${argumentMetadata.name}" deve ser o nome de uma lista.`,
+                        `O argumento "${argumentMetadata.name}" deve ser o nome de ${
+                            argumentMetadata.role === 'list' ? 'uma lista' : 'uma variável'
+                        }.`,
                         location,
-                        'expected-list-name'
+                        argumentMetadata.role === 'list' ? 'expected-list-name' : 'expected-variable-name'
                     ));
-                    return {type: 'ListReference', symbol: {id: '', name: '', variableType: 'list'}, location};
+                    return {
+                        type: argumentMetadata.role === 'list' ? 'ListReference' : 'VariableReference',
+                        symbol: {id: '', name: '', variableType: argumentMetadata.role === 'list' ? 'list' : ''},
+                        location
+                    };
                 }
-                const found = lookupSymbol(node.name, parameters, location, 'list');
-                return {type: 'ListReference', symbol: found ? found.symbol : {id: '', name: node.name, variableType: 'list'}, location};
+                const expectedType = argumentMetadata.role === 'list' ? 'list' : '';
+                const found = lookupSymbol(node.name, parameters, location, expectedType);
+                return {
+                    type: argumentMetadata.role === 'list' ? 'ListReference' : 'VariableReference',
+                    symbol: found ? found.symbol : {id: '', name: node.name, variableType: expectedType},
+                    location
+                };
             }
             const converted = convertExpression(node, parameters);
             if (
@@ -597,7 +618,7 @@ const analyzeAndBuildIR = (ast, options = {}) => {
             });
             return {
                 type: 'ExtensionFlow',
-                namespace: 'extension',
+                namespace: metadata.extensionId ? 'extension' : 'core',
                 name: call.callee,
                 opcode: metadata.opcode,
                 metadata,
@@ -642,15 +663,8 @@ const analyzeAndBuildIR = (ast, options = {}) => {
             };
         }
         if (statement.type === 'ControlStatement') {
-            let name = statement.control;
-            let argument = statement.argument ? convertExpression(statement.argument, parameters) : null;
-            if (name === 'while') {
-                name = 'repeat_until';
-                argument = {
-                    type: 'Reporter', namespace: 'operator', name: 'not', opcode: metadataForNot().opcode,
-                    metadata: metadataForNot(), arguments: [argument], location: statement.location
-                };
-            }
+            const name = statement.control;
+            const argument = statement.argument ? convertExpression(statement.argument, parameters) : null;
             return {
                 type: 'Control',
                 name,
@@ -826,9 +840,15 @@ const generateGraph = ir => {
         if (metadata.mutation) block.mutation = JSON.parse(JSON.stringify(metadata.mutation));
         (metadata.arguments || []).forEach((argumentMetadata, index) => {
             const value = argumentValues[index];
-            if (argumentMetadata.role === 'list') {
+            if (argumentMetadata.role === 'list' || argumentMetadata.role === 'variable') {
                 const symbol = value && value.symbol ? value.symbol : {name: '', id: ''};
-                setField(block, argumentMetadata.field, symbol.name, symbol.id, 'list');
+                setField(
+                    block,
+                    argumentMetadata.field,
+                    symbol.name,
+                    symbol.id,
+                    argumentMetadata.role === 'list' ? 'list' : ''
+                );
             } else if (argumentMetadata.role === 'field') {
                 setField(block, argumentMetadata.field, value && value.type === 'Literal' ? value.value : '');
             } else if (argumentMetadata.role === 'broadcast-field') {

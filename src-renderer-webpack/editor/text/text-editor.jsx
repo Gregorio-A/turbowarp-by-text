@@ -349,7 +349,9 @@ class TextEditor extends React.Component {
                 `${result.semanticMerge.mergedUnits.length} unidade(s) mesclada(s) automaticamente; ` : ''
             }blocos sincronizados (${result.importedRootIds.length} stack(s), ${
                 result.unsupportedOpcodes.length
-            } opcode(s) em fallback raw, ${record.lastApply && record.lastApply.unchangedUnits || 0} unidade(s) preservada(s)).`,
+            } opcode(s) indisponível(is) mantido(s) somente em blocos, ${
+                record.lastApply && record.lastApply.unchangedUnits || 0
+            } unidade(s) preservada(s)).`,
             statusKind: compilation.success ? 'success' : 'error'
         }));
     }
