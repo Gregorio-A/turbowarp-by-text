@@ -15,6 +15,8 @@ O projeto mantém somente a infraestrutura local necessária para editar, execut
 A sintaxe e a arquitetura estão em [TEXTWARP.md](TEXTWARP.md), e o uso de cada bloco está na referência gerada
 [TEXTWARP_BLOCOS.md](TEXTWARP_BLOCOS.md). Problemas abertos e prioridades estão em
 [TEXTWARP_PRIORIDADES.md](TEXTWARP_PRIORIDADES.md).
+O ambiente completo de edição, navegação, execução e depuração está descrito em
+[TEXTWARP_IDE.md](TEXTWARP_IDE.md).
 
 ## Estrutura necessária
 
