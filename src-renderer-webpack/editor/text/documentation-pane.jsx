@@ -3,14 +3,16 @@ import React from 'react';
 import {marked} from 'marked';
 
 import guideMarkdown from '../../../TEXTWARP.md';
+import ideMarkdown from '../../../TEXTWARP_IDE.md';
 import prioritiesMarkdown from '../../../TEXTWARP_PRIORIDADES.md';
 import referenceMarkdown from '../../../TEXTWARP_BLOCOS.md';
 import {buildDocumentationSections, filterDocumentationSections} from './documentation-content';
 import styles from './documentation-pane.css';
 
-const GROUP_ORDER = ['Manual TextWarp', 'Referência completa', 'Estado do projeto', 'Projeto atual'];
+const GROUP_ORDER = ['Manual TextWarp', 'IDE TextWarp', 'Referência completa', 'Estado do projeto', 'Projeto atual'];
 const DOCUMENT_LINKS = Object.freeze({
     'TEXTWARP.md': 'manual-visao-geral',
+    'TEXTWARP_IDE.md': 'ide-visao-geral-da-ide',
     'TEXTWARP_BLOCOS.md': 'reference-sobre-a-referencia',
     'TEXTWARP_PRIORIDADES.md': 'status-visao-geral-do-status'
 });
@@ -23,7 +25,7 @@ const groupSections = sections => GROUP_ORDER.map(group => ({
 class DocumentationPane extends React.PureComponent {
     constructor (props) {
         super(props);
-        this.state = {activeId: 'manual-visao-geral', query: ''};
+        this.state = {activeId: 'manual-visao-geral', query: props.initialQuery || ''};
         this.article = null;
         this.markdownBody = null;
         this.copyTimer = null;
@@ -34,7 +36,11 @@ class DocumentationPane extends React.PureComponent {
         this.addCopyButtons();
     }
 
-    componentDidUpdate () {
+    componentDidUpdate (previousProps) {
+        if (previousProps.initialQuery !== this.props.initialQuery && this.props.initialQuery !== this.state.query) {
+            this.setState({query: this.props.initialQuery || ''});
+            return;
+        }
         this.addCopyButtons();
     }
 
@@ -47,6 +53,7 @@ class DocumentationPane extends React.PureComponent {
             extensionCatalog: this.props.extensionCatalog,
             extensionPalette: this.props.extensionPalette,
             guideMarkdown,
+            ideMarkdown,
             prioritiesMarkdown,
             referenceMarkdown
         });
@@ -224,12 +231,14 @@ class DocumentationPane extends React.PureComponent {
 
 DocumentationPane.propTypes = {
     extensionCatalog: PropTypes.objectOf(PropTypes.shape({})),
-    extensionPalette: PropTypes.arrayOf(PropTypes.shape({}))
+    extensionPalette: PropTypes.arrayOf(PropTypes.shape({})),
+    initialQuery: PropTypes.string
 };
 
 DocumentationPane.defaultProps = {
     extensionCatalog: {},
-    extensionPalette: []
+    extensionPalette: [],
+    initialQuery: ''
 };
 
 export default DocumentationPane;

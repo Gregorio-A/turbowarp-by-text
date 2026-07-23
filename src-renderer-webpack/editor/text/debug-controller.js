@@ -1,6 +1,7 @@
 'use strict';
 
 const {readSourceRecord} = require('./vm-adapter');
+const {inspectTarget} = require('./debug-inspector');
 
 const controllers = new WeakMap();
 
@@ -16,8 +17,12 @@ class TextWarpDebugController {
         this.compiledStepOnce = new Set();
         this.pauseAllExempt = new Set();
         this.stepAfterBlock = new Map();
+        this.stepOver = new Map();
+        this.stepOut = new Map();
         this.activeByThread = new Map();
         this.runtimeErrors = [];
+        this.consoleEntries = [];
+        this.executionState = 'stopped';
         this.listeners = new Set();
         this.originalCompilerEnabled = null;
         this.interpreterRequired = false;
@@ -27,7 +32,25 @@ class TextWarpDebugController {
         if (this.runtime && typeof this.runtime.on === 'function') {
             this.runtime.on('EXTENSION_ADDED', this.extensionListener);
             this.runtime.on('BLOCKSINFO_UPDATE', this.extensionListener);
-            this.runtime.on('PROJECT_STOP_ALL', () => this.clearPaused(false));
+            this.runtime.on('PROJECT_RUN_START', () => {
+                this.executionState = 'running';
+                this.log('info', 'Execução iniciada.');
+            });
+            this.runtime.on('PROJECT_RUN_STOP', () => {
+                if (!this.pauseAllRequested) this.executionState = 'stopped';
+                this.log('info', 'Execução concluída.');
+            });
+            this.runtime.on('PROJECT_STOP_ALL', () => {
+                this.executionState = 'stopped';
+                this.clearPaused(false);
+                this.log('info', 'Execução interrompida.');
+            });
+            this.runtime.on('SAY', (target, type, message) => {
+                if (message !== '') this.log(type === 'think' ? 'debug' : 'output', String(message), target);
+            });
+            this.runtime.on('QUESTION', question => {
+                if (question) this.log('input', String(question));
+            });
         }
         this.instrumentThreadCreation();
         this.instrumentThreadStepping();
@@ -145,6 +168,8 @@ class TextWarpDebugController {
             this.clearPaused(true);
             this.pauseAllRequested = false;
             this.stepAfterBlock.clear();
+            this.stepOver.clear();
+            this.stepOut.clear();
             this.activeByThread.clear();
             clearInterval(this.pollTimer);
             this.pollTimer = null;
@@ -200,6 +225,22 @@ class TextWarpDebugController {
 
     shouldPause (thread, blockId, block, location) {
         if (!location || block && block.shadow || this.paused.has(thread)) return false;
+        const stepOutDepth = this.stepOut.get(thread);
+        if (stepOutDepth !== undefined) {
+            if ((thread.stack || []).length < stepOutDepth) {
+                this.stepOut.delete(thread);
+                return true;
+            }
+            return false;
+        }
+        const stepOver = this.stepOver.get(thread);
+        if (stepOver) {
+            if ((thread.stack || []).length <= stepOver.depth && stepOver.blockId !== blockId) {
+                this.stepOver.delete(thread);
+                return true;
+            }
+            return false;
+        }
         const steppingFrom = this.stepAfterBlock.get(thread);
         if (steppingFrom && steppingFrom !== blockId) {
             this.stepAfterBlock.delete(thread);
@@ -258,19 +299,45 @@ class TextWarpDebugController {
     captureRuntimeError (error, thread, location) {
         this.runtimeErrors.unshift({
             message: error && error.message ? error.message : String(error),
+            stack: error && error.stack ? error.stack : '',
             targetId: thread && thread.target ? thread.target.id : null,
             targetName: thread && thread.target && thread.target.getName ? thread.target.getName() : '',
             line: location ? location.startLine : null,
             blockId: location ? location.blockId : null,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            callStack: thread && Array.from(thread.stack || []).reverse().map(blockId => {
+                const stackLocation = this.sourceLocation(thread, blockId);
+                return {blockId, line: stackLocation && stackLocation.startLine || null};
+            }) || []
         });
         this.runtimeErrors.length = Math.min(this.runtimeErrors.length, 20);
+        this.log('error', error && error.stack ? error.stack : error && error.message ? error.message : String(error), thread && thread.target, location);
+        this.notify();
+    }
+
+    log (level, message, target = null, location = null) {
+        this.consoleEntries.push({
+            id: `${Date.now()}:${this.consoleEntries.length}`,
+            timestamp: Date.now(),
+            level,
+            message: String(message),
+            targetId: target && target.id || null,
+            targetName: target && target.getName ? target.getName() : '',
+            line: location && location.startLine || null
+        });
+        if (this.consoleEntries.length > 200) this.consoleEntries.splice(0, this.consoleEntries.length - 200);
+        this.notify();
+    }
+
+    clearConsole () {
+        this.consoleEntries = [];
         this.notify();
     }
 
     pauseAll () {
         this.pauseAllExempt.clear();
         this.pauseAllRequested = true;
+        this.executionState = 'pausing';
         this.setEnabled(true);
         this.updateExecutionMode();
         this.notify();
@@ -278,10 +345,14 @@ class TextWarpDebugController {
 
     resumeAll () {
         this.pauseAllRequested = false;
+        this.executionState = 'running';
         this.pauseAllExempt.clear();
         Array.from(this.paused.values()).forEach(state => state.continue());
         Array.from(this.compiledPaused.keys()).forEach(thread => this.restoreCompiledThread(thread));
         this.compiledStepOnce.clear();
+        this.stepAfterBlock.clear();
+        this.stepOver.clear();
+        this.stepOut.clear();
         this.updateExecutionMode();
         this.notify();
     }
@@ -319,6 +390,35 @@ class TextWarpDebugController {
         }
     }
 
+    stepOverThread (threadId) {
+        const entry = Array.from(this.paused.entries()).find(([, state]) => state.threadId === threadId);
+        if (!entry) {
+            this.stepThread(threadId);
+            return;
+        }
+        this.pauseAllExempt.delete(entry[0]);
+        this.stepOver.set(entry[0], {
+            blockId: entry[1].blockId,
+            depth: (entry[0].stack || []).length
+        });
+        this.updateExecutionMode();
+        entry[1].continue();
+    }
+
+    stepOutThread (threadId) {
+        const entry = Array.from(this.paused.entries()).find(([, state]) => state.threadId === threadId);
+        if (!entry) return;
+        const depth = (entry[0].stack || []).length;
+        if (depth <= 1) {
+            this.resumeThread(threadId);
+            return;
+        }
+        this.pauseAllExempt.delete(entry[0]);
+        this.stepOut.set(entry[0], depth);
+        this.updateExecutionMode();
+        entry[1].continue();
+    }
+
     clearPaused (resume) {
         const states = Array.from(this.paused.values());
         const compiledThreads = Array.from(this.compiledPaused.keys());
@@ -327,6 +427,8 @@ class TextWarpDebugController {
         if (resume) compiledThreads.forEach(thread => this.restoreCompiledThread(thread));
         else this.compiledPaused.clear();
         this.compiledStepOnce.clear();
+        this.stepOver.clear();
+        this.stepOut.clear();
         this.pauseAllExempt.clear();
         if (this.enabled) this.updateExecutionMode();
         this.notify();
@@ -350,6 +452,16 @@ class TextWarpDebugController {
             const paused = interpretedPause || compiledPause;
             const blockId = paused ? paused.blockId : (thread.peekStack && thread.peekStack()) || active.blockId;
             const location = paused ? paused.location : this.sourceLocation(thread, blockId) || active.location;
+            const callStack = Array.from(thread.stack || []).reverse().map(stackBlockId => {
+                const stackLocation = this.sourceLocation(thread, stackBlockId);
+                const block = thread.target && thread.target.blocks && thread.target.blocks.getBlock(stackBlockId);
+                return {
+                    blockId: stackBlockId,
+                    opcode: block && block.opcode || '',
+                    line: stackLocation && stackLocation.startLine || null
+                };
+            });
+            const stage = this.runtime && this.runtime.getTargetForStage && this.runtime.getTargetForStage();
             return {
                 id: paused ? paused.threadId : (thread.getId ? thread.getId() : active.threadId),
                 targetId: thread.target && thread.target.id,
@@ -359,7 +471,10 @@ class TextWarpDebugController {
                 paused: Boolean(paused),
                 executionMode: thread.isCompiled ? 'jit' : 'interpreter',
                 stepGranularity: compiledPause ? 'frame' : 'block',
-                status: Boolean(paused) ? 'paused' : 'running'
+                canStepOut: !compiledPause && callStack.length > 1,
+                status: Boolean(paused) ? 'paused' : 'running',
+                callStack,
+                inspector: inspectTarget(thread.target, stage)
             };
         });
         const activeLinesByTarget = {};
@@ -374,9 +489,12 @@ class TextWarpDebugController {
             selectiveInterpreter: Boolean(this.enabled && this.hasBreakpoints() && !this.pauseAllRequested),
             jitEnabled: Boolean(this.runtime && this.runtime.compilerOptions && this.runtime.compilerOptions.enabled),
             pauseAllRequested: this.pauseAllRequested,
+            executionState: threads.some(thread => thread.paused) ? 'paused' :
+                threads.length ? 'running' : this.executionState,
             threads,
             activeLinesByTarget,
-            runtimeErrors: this.runtimeErrors.slice()
+            runtimeErrors: this.runtimeErrors.slice(),
+            consoleEntries: this.consoleEntries.slice()
         };
     }
 

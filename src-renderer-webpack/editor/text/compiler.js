@@ -65,9 +65,11 @@ const analyzeAndBuildIR = (ast, options = {}) => {
     const availableOpcodes = options.availableOpcodes ? new Set(options.availableOpcodes) : null;
     const externalVariables = Array.isArray(options.variables) ? options.variables : [];
     const externalBroadcasts = Array.isArray(options.broadcasts) ? options.broadcasts : [];
+    const projectResources = Array.isArray(options.resources) ? options.resources : null;
     const declarations = [];
     const symbols = new Map();
     const broadcasts = new Map();
+    const resourceBindings = [];
 
     if (ast.declaration) {
         if (ast.declaration.type === 'StageDeclaration' && !isStage) {
@@ -373,6 +375,40 @@ const analyzeAndBuildIR = (ast, options = {}) => {
             }
             if (argumentMetadata.role === 'broadcast' || argumentMetadata.role === 'broadcast-field') {
                 registerBroadcast(converted, location);
+            }
+            if (projectResources && converted && converted.type === 'Literal' && typeof converted.value === 'string') {
+                const argumentName = String(argumentMetadata.name || '').toLowerCase();
+                const expectedKinds = /sound/.test(argumentName) ? ['sound'] :
+                    /costume|backdrop/.test(argumentName) ? ['costume'] :
+                        /actor|target|object/.test(argumentName) ? ['actor', 'stage'] : [];
+                const specialValues = new Set([
+                    '_mouse_', '_random_', '_stage_', '_myself_', '_edge_', 'mouse-pointer', 'random position',
+                    'myself', 'Stage', 'next backdrop', 'previous backdrop', 'random backdrop'
+                ]);
+                const matchedResource = projectResources.find(resource =>
+                    expectedKinds.includes(resource.kind) && resource.name === converted.value && (
+                        ['actor', 'stage'].includes(resource.kind) || (
+                            /backdrop/.test(argumentName) ? resource.ownerId === stageId : resource.ownerId === targetId
+                        )
+                    )
+                );
+                if (
+                    expectedKinds.length && converted.value && !specialValues.has(converted.value) &&
+                    !matchedResource
+                ) diagnostics.push(semanticDiagnostic(
+                    `O recurso "${converted.value}" usado em "${name}" não existe no projeto atual.`,
+                    location,
+                    'missing-project-resource'
+                ));
+                if (matchedResource) resourceBindings.push({
+                    resourceId: matchedResource.id,
+                    resourceKind: matchedResource.kind,
+                    ownerId: matchedResource.ownerId,
+                    name: matchedResource.name,
+                    call: name,
+                    argument: argumentMetadata.name,
+                    line: location.line
+                });
             }
             return converted;
         });
@@ -737,6 +773,7 @@ const analyzeAndBuildIR = (ast, options = {}) => {
         target: {id: targetId, name: targetName, isStage, stageId},
         declarations,
         broadcasts: Array.from(broadcasts.values()),
+        resourceBindings,
         procedures,
         scripts
     };
@@ -1184,7 +1221,8 @@ const generateGraph = ir => {
         sourceMap,
         units,
         declarations: ir.declarations,
-        broadcasts: ir.broadcasts
+        broadcasts: ir.broadcasts,
+        resourceBindings: ir.resourceBindings
     };
 };
 

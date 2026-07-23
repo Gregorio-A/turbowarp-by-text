@@ -16,6 +16,7 @@ const defaultRecord = (source, moduleId = null) => ({
     sourceMap: {},
     units: [],
     generatedVariables: [],
+    resourceBindings: [],
     breakpoints: []
 });
 
@@ -95,6 +96,7 @@ const readSourceRecord = target => {
         if (!normalized.moduleId) normalized.moduleId = target.id;
         if (!Array.isArray(normalized.units)) normalized.units = [];
         if (!Array.isArray(normalized.generatedVariables)) normalized.generatedVariables = [];
+        if (!Array.isArray(normalized.resourceBindings)) normalized.resourceBindings = [];
         if (!Array.isArray(normalized.breakpoints)) normalized.breakpoints = [];
         const markers = findGeneratedRootComments(target);
         if (markers.length > 0) {
@@ -401,6 +403,7 @@ const applyCompilation = (vm, target, compilation) => {
         sourceMap: finalSourceMap,
         units: finalUnits,
         generatedVariables,
+        resourceBindings: graph.resourceBindings || [],
         lastApply
     }));
     if (vm.editingTarget === target && typeof vm.emitWorkspaceUpdate === 'function') vm.emitWorkspaceUpdate();

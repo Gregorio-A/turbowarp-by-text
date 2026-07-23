@@ -12,6 +12,11 @@
     font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
+.root :focus-visible {
+    outline: 2px solid var(--motion-primary);
+    outline-offset: 1px;
+}
+
 .toolbar {
     min-height: 3.4rem;
     padding: 0.45rem 0.75rem;
@@ -156,6 +161,140 @@
     background: var(--input-background);
 }
 
+.main-workspace {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex: 1;
+}
+
+.open-tabs {
+    min-height: 2.15rem;
+    display: flex;
+    flex: none;
+    overflow-x: auto;
+    background: var(--ui-secondary);
+    border-bottom: 1px solid var(--ui-black-transparent);
+    scrollbar-width: thin;
+}
+
+.open-tabs > div {
+    min-width: 7rem;
+    max-width: 13rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.55rem;
+    overflow: hidden;
+    color: var(--text-primary-transparent);
+    background: transparent;
+    border: 0;
+    border-right: 1px solid var(--ui-black-transparent);
+    border-bottom: 2px solid transparent;
+    font-size: 0.66rem;
+}
+
+.file-tab-main {
+    min-width: 0;
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0;
+    overflow: hidden;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+}
+
+.file-tab-main > span {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.open-tabs .active-file-tab {
+    color: var(--text-primary);
+    background: var(--ui-white);
+    border-bottom-color: var(--motion-primary);
+}
+
+.open-tabs small {
+    color: var(--control-primary);
+}
+
+.close-file-tab {
+    width: 1rem;
+    height: 1rem;
+    display: grid;
+    flex: none;
+    place-items: center;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    border-radius: 0.2rem;
+    cursor: pointer;
+}
+
+.close-file-tab:hover {
+    background: var(--ui-black-transparent);
+}
+
+.quick-panel {
+    min-height: 2.8rem;
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    overflow-x: auto;
+    background: var(--input-background);
+    border-bottom: 1px solid var(--ui-black-transparent);
+    font-size: 0.66rem;
+}
+
+.quick-panel > strong {
+    white-space: nowrap;
+}
+
+.quick-panel label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.quick-panel label span {
+    color: var(--text-primary-transparent);
+}
+
+.quick-panel input {
+    width: 7rem;
+    padding: 0.3rem;
+    color: var(--text-primary);
+    background: var(--ui-white);
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.3rem;
+    font: inherit;
+}
+
+.quick-panel button {
+    padding: 0.3rem 0.5rem;
+    color: var(--text-primary);
+    background: var(--ui-white);
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.3rem;
+    cursor: pointer;
+    font-size: 0.62rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
 .view-pane {
     position: absolute;
     inset: 0;
@@ -178,6 +317,15 @@
 }
 
 .split-mode .blocks-pane {
+    left: 50%;
+}
+
+.dual-mode .code-pane {
+    right: 50%;
+    border-right: 1px solid var(--ui-black-transparent);
+}
+
+.dual-mode .secondary-code-pane {
     left: 50%;
 }
 
@@ -240,6 +388,34 @@
     gap: 0.4rem;
     padding: 0.35rem 0.65rem 0.25rem;
     border-bottom: 1px solid var(--ui-black-transparent);
+}
+
+.panel-tabs {
+    display: flex;
+    align-self: stretch;
+    margin-left: 0.6rem;
+}
+
+.panel-tabs button {
+    padding: 0 0.45rem;
+    color: var(--text-primary-transparent);
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-size: 0.62rem;
+    font-weight: 700;
+}
+
+.panel-tabs button.active-panel-tab {
+    color: var(--text-primary);
+    border-bottom-color: var(--motion-primary);
+}
+
+.panel-tabs small {
+    padding: 0.08rem 0.24rem;
+    background: var(--ui-black-transparent);
+    border-radius: 0.4rem;
 }
 
 .status-dot {
@@ -309,10 +485,51 @@
 }
 
 .diagnostic {
+    width: 100%;
     display: flex;
     gap: 0.5rem;
     padding: 0.15rem 0;
     line-height: 1.25;
+    align-items: center;
+}
+
+.diagnostic > button:first-child {
+    min-width: 0;
+    display: flex;
+    flex: 1;
+    gap: 0.5rem;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.diagnostic > button:first-child:hover {
+    background: var(--ui-black-transparent);
+}
+
+.diagnostic small {
+    margin-left: auto;
+    color: var(--text-primary-transparent);
+    font-family: monospace;
+}
+
+.diagnostic em {
+    color: var(--text-primary-transparent);
+    font-style: normal;
+}
+
+.diagnostic-help {
+    padding: 0.15rem 0.35rem;
+    color: var(--motion-primary);
+    background: transparent;
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.25rem;
+    cursor: pointer;
+    font-size: 0.58rem;
+    font-weight: 700;
 }
 
 .diagnostic-location {
@@ -335,6 +552,13 @@
 
 .debugger {
     padding: 0.45rem 0.65rem 0.65rem;
+}
+
+.debug-grid {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(18rem, 1fr) minmax(22rem, 1.3fr);
+    gap: 0.5rem;
 }
 
 .debug-actions,
@@ -374,11 +598,190 @@
     padding: 0.2rem 0.4rem;
     background: var(--input-background);
     border-radius: 0.35rem;
+    color: var(--text-primary);
+    border: 1px solid transparent;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.thread.selected-thread {
+    border-color: var(--motion-primary);
+}
+
+.thread .thread-select {
+    min-width: 0;
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: inherit;
 }
 
 .thread code {
     margin-right: auto;
     color: var(--text-primary-transparent);
+}
+
+.thread [role="button"] {
+    padding: 0.2rem 0.42rem;
+    background: var(--ui-secondary);
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.3rem;
+    font-size: 0.62rem;
+    font-weight: 700;
+}
+
+.inspector {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+}
+
+.inspector section {
+    min-width: 0;
+    padding: 0.35rem;
+    overflow: auto;
+    background: var(--input-background);
+    border-radius: 0.35rem;
+}
+
+.inspector h3 {
+    margin: 0 0 0.3rem;
+    color: var(--text-primary-transparent);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+}
+
+.inspector section > div,
+.inspector section > button,
+.inspector form {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.18rem 0;
+}
+
+.inspector section > div code,
+.inspector section > button code {
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inspector section > button {
+    width: 100%;
+    color: var(--text-primary);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+}
+
+.inspector input {
+    min-width: 0;
+    flex: 1;
+    padding: 0.25rem;
+    color: var(--text-primary);
+    background: var(--ui-white);
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.25rem;
+    font: inherit;
+}
+
+.inspector button {
+    padding: 0.18rem 0.3rem;
+    color: var(--text-primary);
+    background: var(--ui-secondary);
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.25rem;
+    cursor: pointer;
+    font-size: 0.6rem;
+}
+
+.console {
+    padding: 0.35rem 0.65rem 0.65rem;
+}
+
+.console-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.3rem;
+}
+
+.console-actions span {
+    color: var(--text-primary-transparent);
+}
+
+.console-actions button {
+    margin-left: auto;
+    padding: 0.2rem 0.4rem;
+    color: var(--text-primary);
+    background: var(--input-background);
+    border: 1px solid var(--ui-black-transparent);
+    border-radius: 0.25rem;
+    cursor: pointer;
+    font-size: 0.62rem;
+}
+
+.console-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.console-entries > button {
+    display: grid;
+    grid-template-columns: 4.5rem 3.5rem 7rem minmax(0, 1fr);
+    gap: 0.4rem;
+    padding: 0.22rem 0.35rem;
+    color: var(--text-primary);
+    background: var(--input-background);
+    border: 0;
+    border-left: 3px solid var(--text-primary-transparent);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.console-entries > button:disabled {
+    cursor: default;
+}
+
+.console-entries time,
+.console-entries > button > span,
+.console-entries code {
+    color: var(--text-primary-transparent);
+}
+
+.console-entries pre {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: pre-wrap;
+}
+
+.console-entries .error {
+    border-left-color: var(--red-primary);
+}
+
+.console-entries .output {
+    border-left-color: var(--pen-primary);
+}
+
+.console-entries .input {
+    border-left-color: var(--sensing-primary);
 }
 
 .thread-state {
@@ -398,6 +801,19 @@
 .runtime-error {
     margin-top: 0.35rem;
     color: var(--red-tertiary);
+}
+
+.runtime-error summary {
+    cursor: pointer;
+}
+
+.runtime-error pre {
+    margin: 0.3rem 0;
+    padding: 0.35rem;
+    overflow: auto;
+    color: var(--text-primary);
+    background: var(--input-background);
+    white-space: pre-wrap;
 }
 
 :global(.textwarp-breakpoint-glyph) {

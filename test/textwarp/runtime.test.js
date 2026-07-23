@@ -114,7 +114,15 @@ on green_flag:
     assert.equal(paused.threads.length, 2);
     assert.equal(paused.threads.every(thread => thread.paused), true);
     assert.deepEqual(new Set(paused.threads.map(thread => thread.line)), new Set([4, 6]));
+    assert.equal(paused.executionState, 'paused');
+    assert.ok(paused.threads.every(thread => thread.callStack.length > 0));
+    assert.ok(paused.threads.every(thread => thread.inspector.variables.some(variable => variable.name === 'score')));
     assert.equal(Object.values(target.variables).find(variable => variable.name === 'score').value, 0);
+
+    debuggerController.log('output', 'mensagem de teste', target);
+    assert.equal(debuggerController.snapshot().consoleEntries.at(-1).message, 'mensagem de teste');
+    debuggerController.clearConsole();
+    assert.equal(debuggerController.snapshot().consoleEntries.length, 0);
 
     debuggerController.resumeAll();
     await new Promise(resolve => setTimeout(resolve, 0));

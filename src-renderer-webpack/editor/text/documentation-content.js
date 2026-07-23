@@ -128,6 +128,12 @@ const buildDocumentationSections = options => [
         overviewTitle: 'Visão geral'
     }),
     ...splitMarkdownDocument({
+        id: 'ide',
+        group: 'IDE TextWarp',
+        markdown: options.ideMarkdown,
+        overviewTitle: 'Visão geral da IDE'
+    }),
+    ...splitMarkdownDocument({
         id: 'reference',
         group: 'Referência completa',
         markdown: options.referenceMarkdown,

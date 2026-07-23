@@ -1,9 +1,49 @@
 'use strict';
 
 const {blockRegistry, controlRegistry, eventRegistry} = require('./block-registry');
+const {
+    findDefinitions,
+    findReferences,
+    formatText,
+    getCompletions,
+    getDocumentSymbols,
+    getHover,
+    getParameterScopes,
+    getSignatureHelp,
+    renameEdits
+} = require('./language-service');
 
 let monacoPromise = null;
 let languageRegistered = false;
+const modelContexts = new Map();
+
+const modelKey = modelOrUri => String(modelOrUri && (modelOrUri.uri || modelOrUri));
+const getModelContext = model => modelContexts.get(modelKey(model)) || {};
+const setModelContext = (modelOrUri, context) => modelContexts.set(modelKey(modelOrUri), context || {});
+const clearModelContext = modelOrUri => modelContexts.delete(modelKey(modelOrUri));
+
+const asRange = (monaco, range) => new monaco.Range(
+    range.startLineNumber,
+    range.startColumn,
+    range.endLineNumber,
+    range.endColumn
+);
+const uriForModelKey = (monaco, key) => monaco.Uri.parse(`inmemory://textwarp/${encodeURIComponent(key || 'target')}.tw`);
+const documentsForSymbol = (model, name, line) => {
+    const context = getModelContext(model);
+    const documents = context.documents || [];
+    const parameter = getParameterScopes(model.getValue()).some(item =>
+        item.name === name && line >= item.startLine && line <= item.endLine
+    );
+    if (parameter) return [{modelKey: context.targetId, source: model.getValue()}];
+    const globalDefinition = documents.some(document => getDocumentSymbols(document.source).some(symbol =>
+        symbol.name === name && symbol.global
+    ));
+    return globalDefinition ? documents : [{modelKey: context.targetId, source: model.getValue()}];
+};
+const isGlobalSymbol = (model, name, line) => documentsForSymbol(model, name, line).some(document =>
+    getDocumentSymbols(document.source).some(symbol => symbol.name === name && symbol.global)
+);
 
 const configureLanguage = monaco => {
     if (languageRegistered) return;
@@ -62,7 +102,12 @@ const configureLanguage = monaco => {
         }
     });
     monaco.languages.registerCompletionItemProvider('textwarp', {
-        provideCompletionItems: () => {
+        provideCompletionItems: model => {
+            const context = getModelContext(model);
+            const availableHere = metadata => !(
+                context.isStage && metadata.allowStage === false ||
+                !context.isStage && metadata.allowSprite === false
+            );
             const snippet = monaco.languages.CompletionItemKind.Snippet;
             const suggestions = [
                 {
@@ -130,6 +175,7 @@ const configureLanguage = monaco => {
                 }
             ];
             Object.entries(eventRegistry).forEach(([name, metadata]) => {
+                if (!availableHere(metadata)) return;
                 const examples = (metadata.arguments || []).map((argument, index) =>
                     `\${${index + 1}:${argument.name === 'value' ? '10' : '"value"'}}`
                 );
@@ -142,6 +188,7 @@ const configureLanguage = monaco => {
                 });
             });
             Object.entries(blockRegistry).forEach(([name, metadata]) => {
+                if (!availableHere(metadata)) return;
                 const placeholders = metadata.arguments.map((argument, index) => {
                     const example = argument.role === 'list' ? 'items' : argument.role === 'variable' ? 'value' :
                         argument.valueType === 'boolean' ? 'true' :
@@ -165,7 +212,8 @@ const configureLanguage = monaco => {
                     insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
                 });
             });
-            Object.values(window.__textwarpExtensionCatalog || {}).forEach(metadata => {
+            Object.values(context.extensionCatalog || {}).forEach(metadata => {
+                if (!availableHere(metadata)) return;
                 const placeholders = (metadata.arguments || []).map((argument, index) => {
                     const example = argument.valueType === 'number' ? '1' :
                         argument.valueType === 'boolean' ? 'true' : '"value"';
@@ -191,6 +239,148 @@ const configureLanguage = monaco => {
                 });
             });
             return {suggestions};
+        }
+    });
+    monaco.languages.registerCompletionItemProvider('textwarp', {
+        triggerCharacters: ['(', ',', '.'],
+        provideCompletionItems: (model, position) => ({
+            suggestions: getCompletions(
+                model.getValue(),
+                position.lineNumber,
+                position.column,
+                getModelContext(model)
+            ).map(item => ({
+                label: item.label,
+                kind: item.kind === 'procedure' ? monaco.languages.CompletionItemKind.Method :
+                    item.kind === 'variable' ? monaco.languages.CompletionItemKind.Variable :
+                        item.kind === 'list' ? monaco.languages.CompletionItemKind.Value :
+                            item.kind === 'resource' ? monaco.languages.CompletionItemKind.Reference :
+                                monaco.languages.CompletionItemKind.Text,
+                detail: item.detail,
+                documentation: item.documentation,
+                insertText: item.insertText,
+                sortText: item.sortText
+            }))
+        })
+    });
+    monaco.languages.registerHoverProvider('textwarp', {
+        provideHover: (model, position) => {
+            const hover = getHover(model.getValue(), position.lineNumber, position.column, getModelContext(model));
+            if (!hover) return null;
+            return {
+                range: asRange(monaco, hover.range),
+                contents: [
+                    {value: `**${hover.title}**`},
+                    {value: `\`\`\`textwarp\n${hover.code}\n\`\`\``},
+                    {value: hover.documentation}
+                ]
+            };
+        }
+    });
+    monaco.languages.registerDocumentSymbolProvider('textwarp', {
+        provideDocumentSymbols: model => getDocumentSymbols(model.getValue()).map(symbol => ({
+            name: symbol.name,
+            detail: symbol.detail,
+            kind: symbol.kind === 'procedure' ? monaco.languages.SymbolKind.Function :
+                symbol.kind === 'event' ? monaco.languages.SymbolKind.Event :
+                    symbol.kind === 'list' ? monaco.languages.SymbolKind.Array :
+                        symbol.kind === 'actor' || symbol.kind === 'stage' ? monaco.languages.SymbolKind.Module :
+                            monaco.languages.SymbolKind.Variable,
+            range: asRange(monaco, symbol.range),
+            selectionRange: asRange(monaco, symbol.range),
+            children: []
+        }))
+    });
+    monaco.languages.registerDefinitionProvider('textwarp', {
+        provideDefinition: (model, position) => {
+            const word = model.getWordAtPosition(position);
+            if (!word) return null;
+            return documentsForSymbol(model, word.word, position.lineNumber).flatMap(document =>
+                findDefinitions(document.source, word.word, {
+                    line: document.modelKey === getModelContext(model).targetId ? position.lineNumber : undefined
+                }).map(definition => ({
+                    uri: document.modelKey ? uriForModelKey(monaco, document.modelKey) : model.uri,
+                    range: asRange(monaco, definition.range)
+                }))
+            );
+        }
+    });
+    monaco.languages.registerReferenceProvider('textwarp', {
+        provideReferences: (model, position) => {
+            const word = model.getWordAtPosition(position);
+            if (!word) return [];
+            return documentsForSymbol(model, word.word, position.lineNumber).flatMap(document =>
+                findReferences(document.source, word.word, {
+                    line: document.modelKey === getModelContext(model).targetId ? position.lineNumber : undefined
+                }).map(reference => ({
+                    uri: document.modelKey ? uriForModelKey(monaco, document.modelKey) : model.uri,
+                    range: asRange(monaco, reference.range)
+                }))
+            );
+        }
+    });
+    monaco.languages.registerRenameProvider('textwarp', {
+        resolveRenameLocation: (model, position) => {
+            const word = model.getWordAtPosition(position);
+            if (!word || !renameEdits(model.getValue(), word.word, '__valid_name__', {
+                allowUndeclared: word && isGlobalSymbol(model, word.word, position.lineNumber),
+                line: position.lineNumber
+            }).length) {
+                return {rejectReason: 'Somente variáveis, listas e procedimentos declarados podem ser renomeados com segurança.'};
+            }
+            return {
+                text: word.word,
+                range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn)
+            };
+        },
+        provideRenameEdits: (model, position, newName) => {
+            const word = model.getWordAtPosition(position);
+            if (!word) return {edits: []};
+            const global = isGlobalSymbol(model, word.word, position.lineNumber);
+            return {
+                edits: documentsForSymbol(model, word.word, position.lineNumber).flatMap(document => {
+                    const resource = document.modelKey ? uriForModelKey(monaco, document.modelKey) : model.uri;
+                    const documentModel = monaco.editor.getModel(resource);
+                    return renameEdits(document.source, word.word, newName, {
+                        allowUndeclared: global,
+                        line: document.modelKey === getModelContext(model).targetId ? position.lineNumber : undefined
+                    }).map(edit => ({
+                        resource,
+                        textEdit: {range: asRange(monaco, edit.range), text: edit.text},
+                        versionId: documentModel ? documentModel.getVersionId() : undefined
+                    }));
+                })
+            };
+        }
+    });
+    monaco.languages.registerDocumentFormattingEditProvider('textwarp', {
+        provideDocumentFormattingEdits: model => [{
+            range: model.getFullModelRange(),
+            text: formatText(model.getValue())
+        }]
+    });
+    monaco.languages.registerSignatureHelpProvider('textwarp', {
+        signatureHelpTriggerCharacters: ['(', ','],
+        provideSignatureHelp: (model, position) => {
+            const signature = getSignatureHelp(
+                model.getValue(),
+                position.lineNumber,
+                position.column,
+                getModelContext(model)
+            );
+            if (!signature) return null;
+            return {
+                value: {
+                    signatures: [{
+                        label: signature.label,
+                        documentation: signature.documentation,
+                        parameters: signature.parameters
+                    }],
+                    activeSignature: 0,
+                    activeParameter: signature.activeParameter
+                },
+                dispose: () => {}
+            };
         }
     });
 };
@@ -236,5 +426,8 @@ const loadMonaco = () => {
 };
 
 module.exports = {
-    loadMonaco
+    clearModelContext,
+    getModelContext,
+    loadMonaco,
+    setModelContext
 };

@@ -17,6 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const sourceDocuments = {
     guideMarkdown: read('TEXTWARP.md'),
+    ideMarkdown: read('TEXTWARP_IDE.md'),
     prioritiesMarkdown: read('TEXTWARP_PRIORIDADES.md'),
     referenceMarkdown: read('TEXTWARP_BLOCOS.md')
 };
@@ -27,11 +28,25 @@ test('documentation pane is built from every canonical TextWarp document', () =>
     assert.equal(new Set(sections.map(section => section.id)).size, sections.length);
     assert.deepEqual(
         new Set(sections.map(section => section.group)),
-        new Set(['Manual TextWarp', 'Referência completa', 'Estado do projeto', 'Projeto atual'])
+        new Set(['Manual TextWarp', 'IDE TextWarp', 'Referência completa', 'Estado do projeto', 'Projeto atual'])
     );
     assert.ok(sections.some(section => section.id === 'manual-visao-geral'));
+    assert.ok(sections.some(section => section.id === 'ide-inteligencia-da-linguagem'));
     assert.ok(sections.some(section => section.id === 'reference-movimento'));
     assert.ok(sections.some(section => section.id === 'status-alta-prioridade'));
+    [
+        'Editor de código',
+        'Inteligência da linguagem',
+        'Recursos específicos do software',
+        'Organização do projeto',
+        'Integração com o software principal',
+        'Execução e console',
+        'Depuração',
+        'Produtividade e recuperação',
+        'Documentação integrada',
+        'Segurança e estabilidade',
+        'Usabilidade e acessibilidade'
+    ].forEach(title => assert.ok(sections.some(section => section.group === 'IDE TextWarp' && section.title === title), title));
 });
 
 test('runtime documentation references every native syntax and internal component', () => {
